@@ -173,6 +173,7 @@
         do-ip6 = true;
         do-ip4 = true;
         port = 53;
+        val-permissive-mode = true;
       };
       forward-zone = {
         name = ".";
