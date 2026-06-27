@@ -158,8 +158,27 @@
           AdvAutonomous on;
           AdvRouterAddr on;
         };
+        RDNSS fdea:d:beef::1 {
+        };
       };
     '';
+  };
+
+  services.unbound = {
+    enable = true;
+    settings = {
+      server = {
+        interface = [ "::1" "fdea:d:beef::1" ];
+        access-control = [ "::1 allow" "::0/0 allow" ];
+        do-ip6 = true;
+        do-ip4 = true;
+        port = 53;
+      };
+      forward-zone = {
+        name = ".";
+        forward-addr = [ "223.5.5.5" "223.6.6.6" ];
+      };
+    };
   };
   # Some programs need SUID wrappers, can be configured further or are
   # started in user sessions.
@@ -190,6 +209,7 @@
     rules = {
       lan-to-wan = { from = [ "lan" ]; to = [ "wan" ]; verdict = "accept"; };
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
+      lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
   };
