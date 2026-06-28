@@ -272,9 +272,10 @@
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
 
-        domain(geosite:geolocation-!cn) -> proxy
+        dip(geoip:cn) -> direct
+        domain(geosite:cn) -> direct
 
-        fallback: direct
+        fallback: proxy
       }
     '';
   };
