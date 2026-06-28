@@ -270,12 +270,16 @@
       # dae intercepts LAN DNS on port 53 and forwards everything to SmartDNS
       # which handles DNS64 synthesis.
       dns {
+        bind: 'udp://[fdea:d:beef::1]:53'
         upstream {
           smartdns: 'udp://127.0.0.1:5353'
         }
         routing {
           request {
             fallback: smartdns
+          }
+          response {
+            fallback: accept
           }
         }
       }
