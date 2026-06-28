@@ -233,6 +233,7 @@
       global {
         tproxy_port: 10800
         wan_interface: ppp0 # Use "auto" to auto detect WAN interface.
+        lan_interface: br-lan
 
         log_level: info
         allow_insecure: false
