@@ -36,7 +36,7 @@
   # services.xserver.enable = true;
 
 
-  
+
 
   # Configure keymap in X11
   # services.xserver.xkb.layout = "us";
@@ -85,6 +85,10 @@
       file = ./secrets/ppp-name.age;
       path = "/etc/ppp/name";
     };
+    secrets.dae-sub = {
+      file = ./secrets/dae-sub.age;
+      path = "/etc/dae/local.sub";
+    };
   };
   # networking.useDHCP = false;
   services.pppd = {
@@ -123,8 +127,12 @@
   boot.kernel.sysctl = {
     "net.ipv6.conf.all.forwarding" = 1;
     "net.ipv6.conf.all.accept_ra" = 2;
+    "net.ipv4.conf.all.forwarding" = 1;
+    # see https://github.com/daeuniverse/dae/blob/main/docs/en/user-guide/kernel-parameters.md
+    "net.ipv4.conf.br-lan.send_redirects" = 0;
+    "net.ipv4.ip_forward" = 1;
   };
-  
+
   networking.bridges = {
     "br-lan".interfaces = [ "enp2s0f1" ];
   };
@@ -215,6 +223,60 @@
     };
   };
 
+  services.dae = {
+    enable = true;
+    openFirewall = {
+      enable = true;
+      port = 10800;
+    };
+    config = ''
+      global {
+        tproxy_port: 10800
+        wan_interface: ppp0 # Use "auto" to auto detect WAN interface.
+
+        log_level: info
+        allow_insecure: false
+        auto_config_kernel_parameter: false
+      }
+
+      subscription {
+        'file://local.sub'
+      }
+
+      # See https://github.com/daeuniverse/dae/blob/main/docs/en/configuration/dns.md for full examples.
+      dns {
+        upstream {
+          googledns: 'tcp+udp://dns.google:53'
+          alidns: 'udp://dns.alidns.com:53'
+        }
+        routing {
+          request {
+            fallback: alidns
+          }
+          response {
+            upstream(googledns) -> accept
+            ip(geoip:private) && !qname(geosite:cn) -> googledns
+            fallback: accept
+          }
+        }
+      }
+
+      group {
+        proxy {}
+      }
+
+      routing {
+        pname(NetworkManager) -> direct
+        dip(224.0.0.0/3, 'ff00::/8') -> direct
+        dip(geoip:private) -> direct
+
+        domain(geosite:geolocation-!cn) -> proxy
+
+        fallback: direct
+      }
+    '';
+  };
+
   # Copy the NixOS configuration file and link it from the resulting system
   # (/run/current-system/configuration.nix). This is useful in case you
   # accidentally delete configuration.nix.
@@ -249,4 +311,3 @@
   system.stateVersion = "26.05"; # Did you read the comment?
 
 }
-
