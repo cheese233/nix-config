@@ -172,17 +172,38 @@
     '';
   };
 
-  # SmartDNS with DNS64; dae forwards all client DNS here
+  # SmartDNS: upstream resolver for dae, handles DNS64 and anti-pollution
   services.smartdns = {
     enable = true;
     bindPort = 5353;
     settings = {
       bind = "127.0.0.1:5353";
       cache-size = 4096;
-      server = [ "223.5.5.5" "223.6.6.6" ];
+      server = [
+        "223.5.5.5 -blacklist-ip"
+        "223.6.6.6 -blacklist-ip"
+        "8.8.8.8"
+        "8.8.4.4"
+      ];
       dns64 = "64:ff9b::/96";
       prefetch-domain = true;
       speed-check-mode = "none";
+      dualstack-ip-selection = false;
+      "force-AAAA-SOA" = false;
+      blacklist-ip = [
+        "0.0.0.0/8"
+        "10.0.0.0/8"
+        "100.64.0.0/10"
+        "127.0.0.0/8"
+        "169.254.0.0/16"
+        "172.16.0.0/12"
+        "192.0.0.0/24"
+        "192.168.0.0/16"
+        "198.18.0.0/15"
+        "203.0.113.0/24"
+        "224.0.0.0/4"
+        "240.0.0.0/4"
+      ];
     };
   };
 
@@ -266,9 +287,6 @@
         'file://local.sub'
       }
 
-      # See https://github.com/daeuniverse/dae/blob/main/docs/en/configuration/dns.md for full examples.
-      # dae intercepts LAN DNS on port 53 and forwards everything to SmartDNS
-      # which handles DNS64 synthesis.
       dns {
         bind: 'udp://[fdea:d:beef::1]:53'
         upstream {
