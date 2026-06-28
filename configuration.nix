@@ -325,7 +325,7 @@
 
   fileSystems = {
     "/nix".options = [ "compress=zstd" "noatime" ];
-    "/swap".options = [ "noatime" ];
+    "/swap".options = [ "noatime" "nodatacow" ];
   };
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
