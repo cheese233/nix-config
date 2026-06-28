@@ -174,7 +174,7 @@
 
   # Install china domain list from flake package
   environment.etc."smartdns/china-domain-list.txt" = {
-    source = "${inputs.dnsmasq-china-list.packages.${pkgs.system}.default}/etc/smartdns/china-domain-list.txt";
+    source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/smartdns/china-domain-list.txt";
   };
 
   # SmartDNS: upstream resolver for dae, handles DNS64 and anti-pollution

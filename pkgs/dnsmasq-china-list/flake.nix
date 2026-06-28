@@ -22,7 +22,7 @@
         {
           default = pkgs.stdenv.mkDerivation {
             pname = "smartdns-china-list";
-            version = dnsmasq-china-list.lastModified or "unstable";
+            version = toString (dnsmasq-china-list.lastModified or "unstable");
             src = dnsmasq-china-list;
 
             dontBuild = true;
