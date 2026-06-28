@@ -172,23 +172,17 @@
     '';
   };
 
-  services.unbound = {
+  # SmartDNS with DNS64; dae forwards all client DNS here
+  services.smartdns = {
     enable = true;
+    bindPort = 5353;
     settings = {
-      server = {
-        interface = [ "::1" "fdea:d:beef::1" ];
-        access-control = [ "::1 allow" "::0/0 allow" ];
-        do-ip6 = true;
-        do-ip4 = true;
-        port = 53;
-        val-permissive-mode = true;
-        module-config = "\"dns64 validator iterator\"";
-        dns64-prefix = "\"64:ff9b::/96\"";
-      };
-      forward-zone = {
-        name = ".";
-        forward-addr = [ "127.0.0.1@5353" ];
-      };
+      bind = "127.0.0.1:5353";
+      cache-size = 4096;
+      server = [ "223.5.5.5" "223.6.6.6" ];
+      dns64 = "64:ff9b::/96";
+      prefetch-domain = true;
+      speed-check-mode = "none";
     };
   };
 
@@ -273,22 +267,15 @@
       }
 
       # See https://github.com/daeuniverse/dae/blob/main/docs/en/configuration/dns.md for full examples.
-      # dae DNS resolver listens on loopback only; Unbound forwards to it so
-      # client DNS on port 53 is handled by Unbound (DNS64) not hijacked by dae.
+      # dae intercepts LAN DNS on port 53 and forwards everything to SmartDNS
+      # which handles DNS64 synthesis.
       dns {
-        bind: 'udp://127.0.0.1:5353'
         upstream {
-          googledns: 'tcp+udp://dns.google:53'
-          alidns: 'udp://dns.alidns.com:53'
+          smartdns: 'udp://127.0.0.1:5353'
         }
         routing {
           request {
-            fallback: alidns
-          }
-          response {
-            upstream(googledns) -> accept
-            ip(geoip:private) && !qname(geosite:cn) -> googledns
-            fallback: accept
+            fallback: smartdns
           }
         }
       }
