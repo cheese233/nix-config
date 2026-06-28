@@ -177,6 +177,7 @@
     # requires wkpfStrict = false. Otherwise tayga rejects mappings like
     # 64:ff9b::1 -> 0.0.0.1 (private) when the router itself sends traffic.
     wkpfStrict = false;
+    log = [ "drop" "reject" "icmp" "self" ];
   };
 
   # ==================== Firewall ====================
