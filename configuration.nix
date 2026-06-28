@@ -204,7 +204,8 @@
       };
     };
     ipv6 = {
-      address = "64:ff9b::1";
+      # Source address of the TAYGA server; must NOT reside inside the NAT64 prefix
+      address = "fdea:d:beef::1";
       router.address = "64:ff9b::1";
       pool = {
         address = "64:ff9b::";
