@@ -133,10 +133,6 @@
     "net.ipv4.ip_forward" = 1;
   };
 
-  # Jool kernel module for NAT64
-  boot.kernelModules = [ "jool" ];
-  boot.extraModulePackages = [ config.boot.kernelPackages.jool ];
-
   networking.bridges = {
     "br-lan".interfaces = [ "enp2s0f1" ];
   };
@@ -199,11 +195,8 @@
   # Jool NAT64 (Well-Known Prefix 64:ff9b::/96)
   networking.jool = {
     enable = true;
-    nat64 = {
-      enable = true;
-      defaults = {
-        pool6 = "64:ff9b::/96";
-      };
+    nat64.default = {
+      global.pool6 = "64:ff9b::/96";
     };
   };
   # Some programs need SUID wrappers, can be configured further or are
