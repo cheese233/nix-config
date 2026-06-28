@@ -184,25 +184,28 @@
     settings = {
       bind = "[::]:53";
       cache-size = 4096;
-
-      # China domains -> alidns, others fallback to Google DNS
       server = [
         "223.5.5.5 -group alidns"
         "223.6.6.6 -group alidns"
         "8.8.8.8"
         "8.8.4.4"
       ];
-
-      # China domain set and rules
-      domain-set = [ "-name china-list -type list -file /etc/smartdns/china-domain-list.txt" ];
-      domain-rules = [ "/domain-set:china-list/ -nameserver alidns" ];
-
       dns64 = "64:ff9b::/96";
       prefetch-domain = true;
       speed-check-mode = "none";
       dualstack-ip-selection = false;
       "force-AAAA-SOA" = false;
+      # conf-file must come before domain-set/domain-rules alphabetically
+      conf-file = "/etc/smartdns/china-rules.conf";
     };
+  };
+
+  # Separate file for domain-set and domain-rules to ensure ordering
+  environment.etc."smartdns/china-rules.conf" = {
+    text = ''
+      domain-set -name china-list -type list -file /etc/smartdns/china-domain-list.txt
+      domain-rules /domain-set:china-list/ -nameserver alidns
+    '';
   };
 
   # TAYGA stateless NAT64 (Well-Known Prefix 64:ff9b::/96)
