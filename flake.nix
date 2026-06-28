@@ -7,22 +7,25 @@
     dnsmasq-china-list.url = "./pkgs/dnsmasq-china-list";
     secureboot.url = "./pkgs/secureboot";
   };
-  outputs = { self, nixpkgs, agenix, nnf, dae, dnsmasq-china-list, secureboot, ... }@inputs: {
+
+  outputs = { self, nixpkgs, ... }@inputs:
+  let
+    mkHost = hostFile: nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      specialArgs = { inherit inputs; };
+      modules = [
+        ./common.nix
+        hostFile
+        inputs.secureboot.nixosModules.default
+        inputs.agenix.nixosModules.default
+        inputs.nnf.nixosModules.default
+        inputs.dae.nixosModules.dae
+        { environment.systemPackages = [ inputs.agenix.packages.x86_64-linux.default ]; }
+      ];
+    };
+  in {
     nixosConfigurations = {
-      nixos = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        specialArgs = { inherit inputs; };
-        modules = [
-          ./hardware-configuration.nix
-          ./configuration.nix
-          ./kernel.nix
-          secureboot.nixosModules.default
-          agenix.nixosModules.default
-          nnf.nixosModules.default
-          dae.nixosModules.dae
-          { environment.systemPackages = [ agenix.packages.x86_64-linux.default ]; }
-        ];
-      };
+      nixos = mkHost ./hosts/nixos.nix;
     };
   };
 }

@@ -1,96 +1,41 @@
-# Edit this configuration file to define what should be installed on
-# your system. Help is available in the configuration.nix(5) man page, on
-# https://search.nixos.org/options and in the NixOS manual (`nixos-help`).
-
 { config, lib, pkgs, inputs, ... }:
 
 {
-  # Use the systemd-boot EFI boot loader.
-  boot.loader.systemd-boot.enable = true;
-  boot.loader.efi.canTouchEfiVariables = true;
-
-  # Use latest kernel.
-  # boot.kernelPackages = pkgs.linuxPackages_latest;
-
-  networking.hostName = "nixos"; # Define your hostname.
-
-  # Configure network connections interactively with nmcli or nmtui.
-  # networking.networkmanager.enable = true;
-
-  # Set your time zone.
-  time.timeZone = "Asia/Shanghai";
-
-  # Configure network proxy if necessary
-  # networking.proxy.default = "http://user:password@proxy:port/";
-  # networking.proxy.noProxy = "127.0.0.1,localhost,internal.domain";
-
-  # Select internationalisation properties.
-  # i18n.defaultLocale = "en_US.UTF-8";
-  # console = {
-  #   font = "Lat2-Terminus16";
-  #   keyMap = "us";
-  #   useXkbConfig = true; # use xkb.options in tty.
-  # };
-
-  # Enable the X11 windowing system.
-  # services.xserver.enable = true;
-
-
-
-
-  # Configure keymap in X11
-  # services.xserver.xkb.layout = "us";
-  # services.xserver.xkb.options = "eurosign:e,caps:escape";
-
-  # Enable CUPS to print documents.
-  # services.printing.enable = true;
-
-  # Enable sound.
-  # services.pulseaudio.enable = true;
-  # OR
-  # services.pipewire = {
-  #   enable = true;
-  #   pulse.enable = true;
-  # };
-
-  # Enable touchpad support (enabled default in most desktopManager).
-  # services.libinput.enable = true;
-
-  # Define a user account. Don't forget to set a password with ‘passwd’.
-  # users.users.alice = {
-  #   isNormalUser = true;
-  #   extraGroups = [ "wheel" ]; # Enable ‘sudo’ for the user.
-  #   packages = with pkgs; [
-  #     tree
-  #   ];
-  # };
-
-  # programs.firefox.enable = true;
-
-  # List packages installed in system profile.
-  # You can use https://search.nixos.org/ to find more packages (and options).
-  environment.systemPackages = with pkgs; [
-    nano # Do not forget to add an editor to edit configuration.nix! The Nano editor is also installed by default.
-    git
-    age
+  imports = [
+    ../hardware/nixos.nix
+    ../modules/zfs-kernel.nix
   ];
 
+  networking.hostName = "nixos";
+
+  # https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion
+  # Do NOT change this after initial install unless you know what you're doing.
+  system.stateVersion = "26.05";
+
+  fileSystems = {
+    "/nix".options = [ "compress=zstd" "noatime" ];
+    "/swap".options = [ "noatime" "nodatacow" ];
+  };
+  services.openssh.settings.PermitRootLogin = "yes";
+
+  # ==================== Secrets ====================
   age = {
     identityPaths = [ "/var/lib/agenix/key.txt" ];
     secrets.ppp-secrets = {
-      file = ./secrets/ppp-secrets.age;
+      file = ../secrets/ppp-secrets.age;
       path = "/etc/ppp/chap-secrets";
     };
     secrets.ppp-name = {
-      file = ./secrets/ppp-name.age;
+      file = ../secrets/ppp-name.age;
       path = "/etc/ppp/name";
     };
     secrets.dae-sub = {
-      file = ./secrets/dae-sub.age;
+      file = ../secrets/dae-sub.age;
       path = "/etc/dae/local.sub";
     };
   };
-  # networking.useDHCP = false;
+
+  # ==================== PPPoE ====================
   services.pppd = {
     enable = true;
     peers = {
@@ -116,7 +61,10 @@
   };
 
   environment.etc."ppp/resolv.conf".source = "/run/ppp/resolv.conf";
-  systemd.tmpfiles.rules = [ "d /run/ppp 0755 root root -" "f /run/ppp/resolv.conf 0644 root root -" ];
+  systemd.tmpfiles.rules = [
+    "d /run/ppp 0755 root root -"
+    "f /run/ppp/resolv.conf 0644 root root -"
+  ];
 
   systemd.services."pppd-pppoe" = {
     after = [ "agenix.service" ];
@@ -124,11 +72,11 @@
     preStart = "${pkgs.iproute2}/bin/ip link set enp2s0f0 up";
   };
 
+  # ==================== Networking ====================
   boot.kernel.sysctl = {
     "net.ipv6.conf.all.forwarding" = 1;
     "net.ipv6.conf.all.accept_ra" = 2;
     "net.ipv4.conf.all.forwarding" = 1;
-    # see https://github.com/daeuniverse/dae/blob/main/docs/en/user-guide/kernel-parameters.md
     "net.ipv4.conf.br-lan.send_redirects" = 0;
     "net.ipv4.ip_forward" = 1;
   };
@@ -172,12 +120,11 @@
     '';
   };
 
-  # Install china domain list from flake package
+  # ==================== DNS ====================
   environment.etc."smartdns/china-domain-list.txt" = {
     source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/smartdns/china-domain-list.txt";
   };
 
-  # SmartDNS: upstream resolver for dae, handles DNS64 and anti-pollution
   services.smartdns = {
     enable = true;
     bindPort = 53;
@@ -195,12 +142,10 @@
       speed-check-mode = "none";
       dualstack-ip-selection = false;
       "force-AAAA-SOA" = false;
-      # conf-file must come before domain-set/domain-rules alphabetically
       conf-file = "/etc/smartdns/china-rules.conf";
     };
   };
 
-  # Separate file for domain-set and domain-rules to ensure ordering
   environment.etc."smartdns/china-rules.conf" = {
     text = ''
       domain-set -name china-list -type list -file /etc/smartdns/china-domain-list.txt
@@ -208,11 +153,11 @@
     '';
   };
 
-  # TAYGA stateless NAT64 (Well-Known Prefix 64:ff9b::/96)
+  # ==================== NAT64 ====================
   services.tayga = {
     enable = true;
     ipv4 = {
-      address = "192.168.255.1";
+      address = "192.168.255.2";
       router.address = "192.168.255.1";
       pool = {
         address = "192.168.255.0";
@@ -221,7 +166,7 @@
     };
     ipv6 = {
       # Source address of the TAYGA server; must NOT reside inside the NAT64 prefix
-      address = "fdea:d:beef::1";
+      address = "fdea:d:beef::2";
       router.address = "64:ff9b::1";
       pool = {
         address = "64:ff9b::";
@@ -230,23 +175,7 @@
     };
   };
 
-  # Some programs need SUID wrappers, can be configured further or are
-  # started in user sessions.
-  # programs.mtr.enable = true;
-  # programs.gnupg.agent = {
-  #   enable = true;
-  #   enableSSHSupport = true;
-  # };
-
-  # List services that you want to enable:
-
-  # Enable the OpenSSH daemon.
-  services.openssh = { enable = true; settings.PermitRootLogin = "yes"; };
-
-  # Open ports in the firewall.
-  # networking.firewall.allowedTCPPorts = [ ... ];
-  # networking.firewall.allowedUDPPorts = [ ... ];
-  # Or disable the firewall altogether.
+  # ==================== Firewall ====================
   networking.firewall.enable = false;
 
   networking.nftables.firewall = {
@@ -267,6 +196,7 @@
     };
   };
 
+  # ==================== DAE ====================
   services.dae = {
     enable = true;
     openFirewall = {
@@ -317,45 +247,4 @@
       }
     '';
   };
-
-  # Copy the NixOS configuration file and link it from the resulting system
-  # (/run/current-system/configuration.nix). This is useful in case you
-  # accidentally delete configuration.nix.
-  # system.copySystemConfiguration = true;
-
-  fileSystems = {
-    "/nix".options = [ "compress=zstd" "noatime" ];
-    "/swap".options = [ "noatime" "nodatacow" ];
-  };
-
-  nix.settings.experimental-features = [ "nix-command" "flakes" ];
-
-  nix.settings.substituters = [
-    "https://mirrors.tuna.tsinghua.edu.cn/nix-channels/store"
-    "https://nix-community.cachix.org"
-  ];
-
-  nix.settings.trusted-public-keys = [
-    "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
-  ];
-
-  # This option defines the first version of NixOS you have installed on this particular machine,
-  # and is used to maintain compatibility with application data (e.g. databases) created on older NixOS versions.
-  #
-  # Most users should NEVER change this value after the initial install, for any reason,
-  # even if you've upgraded your system to a new NixOS release.
-  #
-  # This value does NOT affect the Nixpkgs version your packages and OS are pulled from,
-  # so changing it will NOT upgrade your system - see https://nixos.org/manual/nixos/stable/#sec-upgrading for how
-  # to actually do that.
-  #
-  # This value being lower than the current NixOS release does NOT mean your system is
-  # out of date, out of support, or vulnerable.
-  #
-  # Do NOT change this value unless you have manually inspected all the changes it would make to your configuration,
-  # and migrated your data accordingly.
-  #
-  # For more information, see `man configuration.nix` or https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion .
-  system.stateVersion = "26.05"; # Did you read the comment?
-
 }
