@@ -15,7 +15,7 @@
           ./kernel.nix
           agenix.nixosModules.default
           nnf.nixosModules.default
-          inputs.daeuniverse.nixosModules.dae
+          inputs.dae.nixosModules.dae
           { environment.systemPackages = [ agenix.packages.x86_64-linux.default ]; }
         ];
       };

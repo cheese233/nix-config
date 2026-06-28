@@ -262,7 +262,9 @@
       }
 
       group {
-        proxy {}
+        proxy {
+          policy: fixed(0)
+        }
       }
 
       routing {
