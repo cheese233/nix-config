@@ -288,7 +288,6 @@
       }
 
       dns {
-        bind: 'udp://[fdea:d:beef::1]:53'
         upstream {
           smartdns: 'udp://127.0.0.1:5353'
         }
