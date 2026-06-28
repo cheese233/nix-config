@@ -311,7 +311,7 @@
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
-        dip('64:ff9b::/96') -> direct
+        # dip('64:ff9b::/96') -> direct
 
         fallback: proxy
       }
@@ -330,7 +330,14 @@
 
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
-  nix.settings.substituters = lib.mkForce [ "https://mirror.sjtu.edu.cn/nix-channels/store" ];
+  nix.settings.substituters = lib.mkForce [
+    "https://mirror.sjtu.edu.cn/nix-channels/store"
+    "https://nix-community.cachix.org"
+  ];
+
+  nix.settings.trusted-public-keys = [
+    "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+  ];
 
   # This option defines the first version of NixOS you have installed on this particular machine,
   # and is used to maintain compatibility with application data (e.g. databases) created on older NixOS versions.
