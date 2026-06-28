@@ -133,6 +133,10 @@
     "net.ipv4.ip_forward" = 1;
   };
 
+  # Jool kernel module for NAT64
+  boot.kernelModules = [ "jool" ];
+  boot.extraModulePackages = [ config.boot.kernelPackages.jool ];
+
   networking.bridges = {
     "br-lan".interfaces = [ "enp2s0f1" ];
   };
@@ -182,10 +186,23 @@
         do-ip4 = true;
         port = 53;
         val-permissive-mode = true;
+        module-config = "dns64 validator iterator";
+        dns64-prefix = "64:ff9b::/96";
       };
       forward-zone = {
         name = ".";
         forward-addr = [ "223.5.5.5" "223.6.6.6" ];
+      };
+    };
+  };
+
+  # Jool NAT64 (Well-Known Prefix 64:ff9b::/96)
+  networking.jool = {
+    enable = true;
+    nat64 = {
+      enable = true;
+      defaults = {
+        pool6 = "64:ff9b::/96";
       };
     };
   };
@@ -275,6 +292,7 @@
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
+        dip('64:ff9b::/96') -> direct
 
         fallback: proxy
       }
