@@ -214,12 +214,6 @@
     };
   };
 
-  # Masquerade TAYGA's dynamic IPv4 pool on the PPPoE WAN interface
-  networking.nat = {
-    enable = true;
-    internalIPs = [ "192.168.255.0/24" ];
-    externalInterface = "ppp0";
-  };
   # Some programs need SUID wrappers, can be configured further or are
   # started in user sessions.
   # programs.mtr.enable = true;
@@ -250,7 +244,7 @@
     rules = {
       lan-to-wan = { from = [ "lan" ]; to = [ "wan" ]; verdict = "accept"; };
       lan-to-nat64 = { from = [ "lan" ]; to = [ "nat64" ]; verdict = "accept"; };
-      nat64-to-wan = { from = [ "nat64" ]; to = [ "wan" ]; verdict = "accept"; };
+      nat64-to-wan = { from = [ "nat64" ]; to = [ "wan" ]; verdict = "accept"; masquerade = true; };
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
