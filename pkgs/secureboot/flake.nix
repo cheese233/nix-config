@@ -1,47 +1,35 @@
 {
-  description = "A SecureBoot-enabled NixOS configurations";
+  description = "A SecureBoot-enabled NixOS configuration module";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     lanzaboote = {
       url = "github:nix-community/lanzaboote/v1.1.0";
-
-      # Optional but recommended to limit the size of your system closure.
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, lanzaboote, ...}: {
-    nixosConfigurations = {
-      yourHost = nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
+  outputs = { self, nixpkgs, lanzaboote, ... }: {
+    nixosModules.default = { pkgs, lib, ... }: {
+      imports = [
+        lanzaboote.nixosModules.lanzaboote
+      ];
 
-        modules = [
-          # This is not a complete NixOS configuration and you need to reference
-          # your normal configuration here.
+      environment.systemPackages = [
+        # For debugging and troubleshooting Secure Boot.
+        pkgs.sbctl
+      ];
 
-          lanzaboote.nixosModules.lanzaboote
+      # Lanzaboote currently replaces the systemd-boot module.
+      # This setting is usually set to true in configuration.nix
+      # generated at installation time. So we force it to false
+      # for now.
+      boot.loader.systemd-boot.enable = lib.mkForce false;
 
-          ({ pkgs, lib, ... }: {
-
-            environment.systemPackages = [
-              # For debugging and troubleshooting Secure Boot.
-              pkgs.sbctl
-            ];
-
-            # Lanzaboote currently replaces the systemd-boot module.
-            # This setting is usually set to true in configuration.nix
-            # generated at installation time. So we force it to false
-            # for now.
-            boot.loader.systemd-boot.enable = lib.mkForce false;
-
-            boot.lanzaboote = {
-              enable = true;
-              pkiBundle = "/var/lib/sbctl";
-            };
-          })
-        ];
+      boot.lanzaboote = {
+        enable = true;
+        pkiBundle = "/var/lib/sbctl";
       };
     };
   };
