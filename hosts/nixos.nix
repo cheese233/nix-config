@@ -173,6 +173,10 @@
         prefixLength = 96;
       };
     };
+    # Using private IPv4 (192.168.255.0/24) with Well-Known Prefix (64:ff9b::/96)
+    # requires wkpfStrict = false. Otherwise tayga rejects mappings like
+    # 64:ff9b::1 -> 0.0.0.1 (private) when the router itself sends traffic.
+    wkpfStrict = false;
   };
 
   # ==================== Firewall ====================
