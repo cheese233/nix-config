@@ -27,7 +27,7 @@
   fileSystems."/swap" =
     { device = "/dev/disk/by-uuid/359e5019-ca17-4e22-91bf-cc9673d4a17c";
       fsType = "btrfs";
-      options = [ "subvol=@swap" ];
+      options = [ "subvol=swap" ];
     };
 
   fileSystems."/boot" =
@@ -36,7 +36,7 @@
       options = [ "fmask=0022" "dmask=0022" ];
     };
 
-  swapDevices = [ ];
+  swapDevices = [ { device = "/swap/swapfile"; } ];
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";
   hardware.cpu.intel.updateMicrocode = lib.mkDefault config.hardware.enableRedistributableFirmware;
