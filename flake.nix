@@ -4,11 +4,13 @@
     agenix = { url = "github:ryantm/agenix"; inputs.nixpkgs.follows = "nixpkgs"; };
     nnf.url = "github:thelegy/nixos-nftables-firewall";
     dae.url = "github:daeuniverse/flake.nix";
+    dnsmasq-china-list.url = "./pkgs/dnsmasq-china-list";
   };
-  outputs = { self, nixpkgs, agenix, nnf, dae, ... }@inputs: {
+  outputs = { self, nixpkgs, agenix, nnf, dae, dnsmasq-china-list, ... }@inputs: {
     nixosConfigurations = {
       nixos = nixpkgs.lib.nixosSystem {
         system = "x86_64-linux";
+        specialArgs = { inherit inputs; };
         modules = [
           ./hardware-configuration.nix
           ./configuration.nix

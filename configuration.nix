@@ -2,7 +2,7 @@
 # your system. Help is available in the configuration.nix(5) man page, on
 # https://search.nixos.org/options and in the NixOS manual (`nixos-help`).
 
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, inputs, ... }:
 
 {
   # Use the systemd-boot EFI boot loader.
@@ -172,6 +172,11 @@
     '';
   };
 
+  # Install china domain list from flake package
+  environment.etc."smartdns/china-domain-list.txt" = {
+    source = "${inputs.dnsmasq-china-list.packages.${pkgs.system}.default}/etc/smartdns/china-domain-list.txt";
+  };
+
   # SmartDNS: upstream resolver for dae, handles DNS64 and anti-pollution
   services.smartdns = {
     enable = true;
@@ -179,10 +184,19 @@
     settings = {
       bind = "[::]:53";
       cache-size = 4096;
+
+      # China domains -> alidns, others fallback to Google DNS
       server = [
-        "223.5.5.5"
-        "223.6.6.6"
+        "223.5.5.5 -group alidns"
+        "223.6.6.6 -group alidns"
+        "8.8.8.8"
+        "8.8.4.4"
       ];
+
+      # China domain set and rules
+      domain-set = [ "-name china-list -type list -file /etc/smartdns/china-domain-list.txt" ];
+      domain-rules = [ "/domain-set:china-list/ -nameserver alidns" ];
+
       dns64 = "64:ff9b::/96";
       prefetch-domain = true;
       speed-check-mode = "none";
