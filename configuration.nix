@@ -182,8 +182,8 @@
         do-ip4 = true;
         port = 53;
         val-permissive-mode = true;
-        module-config = "dns64 validator iterator";
-        dns64-prefix = "64:ff9b::/96";
+        module-config = "\"dns64 validator iterator\"";
+        dns64-prefix = "\"64:ff9b::/96\"";
       };
       forward-zone = {
         name = ".";
@@ -192,12 +192,32 @@
     };
   };
 
-  # Jool NAT64 (Well-Known Prefix 64:ff9b::/96)
-  networking.jool = {
+  # TAYGA stateless NAT64 (Well-Known Prefix 64:ff9b::/96)
+  services.tayga = {
     enable = true;
-    nat64.default = {
-      global.pool6 = "64:ff9b::/96";
+    ipv4 = {
+      address = "192.168.255.1";
+      router.address = "192.168.255.1";
+      pool = {
+        address = "192.168.255.0";
+        prefixLength = 24;
+      };
     };
+    ipv6 = {
+      address = "64:ff9b::1";
+      router.address = "64:ff9b::1";
+      pool = {
+        address = "64:ff9b::";
+        prefixLength = 96;
+      };
+    };
+  };
+
+  # Masquerade TAYGA's dynamic IPv4 pool on the PPPoE WAN interface
+  networking.nat = {
+    enable = true;
+    internalIPs = [ "192.168.255.0/24" ];
+    externalInterface = "ppp0";
   };
   # Some programs need SUID wrappers, can be configured further or are
   # started in user sessions.
@@ -224,9 +244,12 @@
     zones = {
       wan = { interfaces = [ "ppp0" ]; };
       lan = { interfaces = [ "br-lan" ]; };
+      nat64 = { interfaces = [ "nat64" ]; };
     };
     rules = {
       lan-to-wan = { from = [ "lan" ]; to = [ "wan" ]; verdict = "accept"; };
+      lan-to-nat64 = { from = [ "lan" ]; to = [ "nat64" ]; verdict = "accept"; };
+      nat64-to-wan = { from = [ "nat64" ]; to = [ "wan" ]; verdict = "accept"; };
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
