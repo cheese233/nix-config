@@ -187,7 +187,7 @@
       };
       forward-zone = {
         name = ".";
-        forward-addr = [ "223.5.5.5" "223.6.6.6" ];
+        forward-addr = [ "127.0.0.1@5353" ];
       };
     };
   };
@@ -273,7 +273,10 @@
       }
 
       # See https://github.com/daeuniverse/dae/blob/main/docs/en/configuration/dns.md for full examples.
+      # dae DNS resolver listens on loopback only; Unbound forwards to it so
+      # client DNS on port 53 is handled by Unbound (DNS64) not hijacked by dae.
       dns {
+        bind: 'udp://127.0.0.1:5353'
         upstream {
           googledns: 'tcp+udp://dns.google:53'
           alidns: 'udp://dns.alidns.com:53'
