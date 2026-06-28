@@ -175,35 +175,19 @@
   # SmartDNS: upstream resolver for dae, handles DNS64 and anti-pollution
   services.smartdns = {
     enable = true;
-    bindPort = 5353;
+    bindPort = 53;
     settings = {
-      bind = "127.0.0.1:5353";
+      bind = "[::]:53";
       cache-size = 4096;
       server = [
-        "223.5.5.5 -blacklist-ip"
-        "223.6.6.6 -blacklist-ip"
-        "8.8.8.8"
-        "8.8.4.4"
+        "223.5.5.5"
+        "223.6.6.6"
       ];
       dns64 = "64:ff9b::/96";
       prefetch-domain = true;
       speed-check-mode = "none";
       dualstack-ip-selection = false;
       "force-AAAA-SOA" = false;
-      blacklist-ip = [
-        "0.0.0.0/8"
-        "10.0.0.0/8"
-        "100.64.0.0/10"
-        "127.0.0.0/8"
-        "169.254.0.0/16"
-        "172.16.0.0/12"
-        "192.0.0.0/24"
-        "192.168.0.0/16"
-        "198.18.0.0/15"
-        "203.0.113.0/24"
-        "224.0.0.0/4"
-        "240.0.0.0/4"
-      ];
     };
   };
 
@@ -287,30 +271,26 @@
         'file://local.sub'
       }
 
-      dns {
-        upstream {
-          smartdns: 'udp://127.0.0.1:5353'
-        }
-        routing {
-          request {
-            fallback: smartdns
-          }
-          response {
-            fallback: accept
-          }
-        }
-      }
-
       group {
         proxy {
           policy: fixed(0)
         }
       }
-
+      dns {
+        upstream {
+          smartdns: 'udp://127.0.0.1:53'
+        }
+        routing {
+          request {
+            fallback: smartdns
+          }
+        }
+      }
       routing {
         pname(NetworkManager) -> direct
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
+        pname(smartdns) && dport(53) -> must_direct
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
