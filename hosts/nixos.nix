@@ -130,7 +130,7 @@
     bindPort = 53;
     settings = {
       bind = "[::]:53";
-      cache-size = 4096;
+      cache-persist = false;
       server = [
         "223.5.5.5 -group alidns"
         "223.6.6.6 -group alidns"
