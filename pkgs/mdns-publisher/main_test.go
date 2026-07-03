@@ -58,7 +58,7 @@ func newTestServer(t *testing.T, zone *hostnameZone, probeName string) (*mdnsSer
 	t.Helper()
 
 	// Bind a UDP socket on localhost with a random port for IPv4.
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4loopback, Port: 0})
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
 		t.Skipf("cannot bind loopback UDP: %v", err)
 	}
@@ -82,7 +82,7 @@ func sendQueryTo(t *testing.T, serverAddr *net.UDPAddr, query *dns.Msg) []byte {
 		t.Fatalf("pack query: %v", err)
 	}
 
-	client, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4loopback, Port: 0})
+	client, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
 		t.Fatalf("client listen: %v", err)
 	}
@@ -821,7 +821,7 @@ func TestHandlePacket_Pending_Ignores(t *testing.T) {
 	buf, _ := query.Pack()
 
 	// Should not panic, should not answer.
-	server.handlePacket(buf, &net.UDPAddr{IP: net.IPv4loopback, Port: mdnsPort}, nil)
+	server.handlePacket(buf, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mdnsPort}, nil)
 	// No assertion needed – just verify it doesn't crash.
 }
 
@@ -841,7 +841,7 @@ func TestHandlePacket_Probing_DetectsConflictResponse(t *testing.T) {
 	}
 	buf, _ := resp.Pack()
 
-	server.handlePacket(buf, &net.UDPAddr{IP: net.IPv4loopback, Port: mdnsPort}, nil)
+	server.handlePacket(buf, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mdnsPort}, nil)
 
 	if atomic.LoadInt32(&server.conflictDetected) == 0 {
 		t.Error("conflict not detected in probing state")
@@ -864,7 +864,7 @@ func TestHandlePacket_Probing_IgnoresQueries(t *testing.T) {
 	}
 	buf, _ := query.Pack()
 
-	server.handlePacket(buf, &net.UDPAddr{IP: net.IPv4loopback, Port: mdnsPort}, nil)
+	server.handlePacket(buf, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mdnsPort}, nil)
 
 	// No conflict, no answer (probe state doesn't answer queries).
 	if atomic.LoadInt32(&server.conflictDetected) != 0 {
@@ -1155,14 +1155,14 @@ func mDNSQuery(t *testing.T, zone *hostnameZone, query *dns.Msg) *dns.Msg {
 	t.Helper()
 
 	// We need a socket on port 5353 to receive the response.
-	readerConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4loopback, Port: mdnsPort})
+	readerConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mdnsPort})
 	if err != nil {
 		t.Skipf("need port 5353 (run as root): %v", err)
 	}
 	defer readerConn.Close()
 	fromAddr := readerConn.LocalAddr().(*net.UDPAddr)
 
-	writerConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4loopback, Port: 0})
+	writerConn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
 		t.Skipf("bind writer: %v", err)
 	}
