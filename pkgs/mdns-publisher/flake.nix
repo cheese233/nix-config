@@ -139,9 +139,10 @@
                 ExecStart = lib.escapeShellArgs args;
                 Restart = "always";
                 RestartSec = 5;
-                # hardening: tiny privilege surface. mDNS only needs the
-                # ability to read the interface table and send/recv
-                # UDP multicast on AF_INET/AF_INET6.
+                # hardening: tiny privilege surface. mDNS needs:
+                #   AF_INET / AF_INET6: send + receive UDP multicast
+                #   AF_NETLINK:          read interface table via netlink
+                #   AF_UNIX:             Go runtime / systemd-notify
                 DynamicUser = true;
                 NoNewPrivileges = true;
                 CapabilityBoundingSet = [ "" ];
@@ -152,7 +153,7 @@
                 ProtectKernelTunables = true;
                 ProtectKernelModules = true;
                 ProtectControlGroups = true;
-                RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
+                RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_NETLINK" "AF_UNIX" ];
                 RestrictNamespaces = true;
                 RestrictRealtime = true;
                 RestrictSUIDSGID = true;

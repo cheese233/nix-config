@@ -211,10 +211,7 @@ func main() {
 
 	// Open sender sockets for probe/announce/goodbye.
 	// hashicorp/mdns doesn't expose sending, so we do it ourselves.
-	sendConn4, sendConn6, err := openSenderSockets(iface)
-	if err != nil {
-		log.Fatalf("sender sockets: %v", err)
-	}
+	sendConn4, sendConn6 := openSenderSockets(iface)
 	if sendConn4 != nil {
 		defer sendConn4.Close()
 	}
@@ -249,6 +246,7 @@ func main() {
 
 	// Liveness ticker.
 	livenessDone := make(chan struct{})
+	livenessQuit := make(chan struct{})
 	go func() {
 		defer close(livenessDone)
 		t := time.NewTicker(*refresh)
@@ -257,6 +255,8 @@ func main() {
 			select {
 			case <-t.C:
 				log.Printf("alive (%d record(s) for %s)", len(records), fqdn)
+			case <-livenessQuit:
+				return
 			}
 		}
 	}()
@@ -272,10 +272,11 @@ func main() {
 		runGoodbye(fqdn, records, sendConn4, sendConn6)
 	}
 
-	// Stop server, then wait for liveness goroutine.
+	// Stop server, then signal liveness goroutine to exit and wait for it.
 	if err := server.Shutdown(); err != nil {
 		log.Printf("server shutdown: %v", err)
 	}
+	close(livenessQuit)
 	<-livenessDone
 	log.Printf("shutting down")
 }
@@ -306,21 +307,39 @@ func getInterfaceIPs(link netlink.Link) ([]net.IP, error) {
 // Multicast on Linux requires IP_MULTICAST_IF (v4) / IPV6_MULTICAST_IF (v6)
 // — without these, packets would go out the kernel's default interface
 // (which on a router is usually ppp0, not br-lan).
-func openSenderSockets(iface *net.Interface) (v4, v6 *net.UDPConn, err error) {
-	if c, e := net.DialUDP("udp4", nil, mdnsAddr4); e == nil {
-		if e := ipv4.NewPacketConn(c).SetMulticastInterface(iface); e != nil {
+//
+// We use ListenUDP (not DialUDP) for multicast: DialUDP calls connect()
+// which the kernel rejects for IPv6 multicast destinations (EINVAL).
+// ListenUDP gives us an unconnected socket; we use WriteToUDP per send
+// to specify the destination, which is the standard multicast pattern.
+//
+// We also set IP_MULTICAST_TTL / IPV6_MULTICAST_HOPS to 255 per
+// RFC 6762 §11: all mDNS messages MUST have TTL/hop-count 255 so
+// receivers can detect packets that have traversed a router (and
+// discard them).
+func openSenderSockets(iface *net.Interface) (v4, v6 *net.UDPConn) {
+	if c, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0}); e == nil {
+		pc := ipv4.NewPacketConn(c)
+		if e := pc.SetMulticastInterface(iface); e != nil {
 			c.Close()
 			log.Printf("WARN: set IPv4 multicast iface: %v", e)
+		} else if e := pc.SetMulticastTTL(255); e != nil {
+			c.Close()
+			log.Printf("WARN: set IPv4 multicast TTL: %v", e)
 		} else {
 			v4 = c
 		}
 	} else {
 		log.Printf("WARN: IPv4 mDNS send socket: %v", e)
 	}
-	if c, e := net.DialUDP("udp6", nil, mdnsAddr6); e == nil {
-		if e := ipv6.NewPacketConn(c).SetMulticastInterface(iface); e != nil {
+	if c, e := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6unspecified, Port: 0}); e == nil {
+		pc := ipv6.NewPacketConn(c)
+		if e := pc.SetMulticastInterface(iface); e != nil {
 			c.Close()
 			log.Printf("WARN: set IPv6 multicast iface: %v", e)
+		} else if e := pc.SetMulticastHopLimit(255); e != nil {
+			c.Close()
+			log.Printf("WARN: set IPv6 multicast hop limit: %v", e)
 		} else {
 			v6 = c
 		}
@@ -417,12 +436,12 @@ func sendMsg(msg *dns.Msg, conn4, conn6 *net.UDPConn) {
 		return
 	}
 	if conn4 != nil {
-		if _, err := conn4.Write(buf); err != nil {
+		if _, err := conn4.WriteToUDP(buf, mdnsAddr4); err != nil {
 			log.Printf("WARN: send mDNS (v4): %v", err)
 		}
 	}
 	if conn6 != nil {
-		if _, err := conn6.Write(buf); err != nil {
+		if _, err := conn6.WriteToUDP(buf, mdnsAddr6); err != nil {
 			log.Printf("WARN: send mDNS (v6): %v", err)
 		}
 	}
