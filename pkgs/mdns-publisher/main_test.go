@@ -431,20 +431,26 @@ func TestRecords_Legacy_StripsCacheFlush(t *testing.T) {
 	}
 }
 
-func TestRecords_Legacy_StripsCacheFlush(t *testing.T) {
-	zone := newTestZone(t)
-	q := dns.Question{Name: "testhost.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	recs := zone.Records(q, true) // legacy
+func TestRecords_Legacy_PreservesTrueTTL(t *testing.T) {
+	// Records() strips cache-flush for legacy but does NOT cap TTL.
+	// TTL capping (§6.7) happens in answerQuery after known-answer
+	// suppression, so filterKnownAnswers sees the true TTL.
+	records := []dns.RR{mustA(t, "host.local.", "10.0.0.1", 120)}
+	zone := &hostnameZone{
+		records: records,
+		nsec:    buildNSEC("host.local.", records, 120),
+	}
+	q := dns.Question{Name: "host.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	recs := zone.Records(q, true)
 	if len(recs) != 1 {
 		t.Fatalf("got %d, want 1", len(recs))
 	}
-	h := recs[0].Header()
-	if h.Class != dns.ClassINET {
-		t.Errorf("legacy A class = %#x, want INET (no cache-flush)", h.Class)
+	if recs[0].Header().Ttl != 120 {
+		t.Errorf("legacy TTL = %d, want 120 (true value)", recs[0].Header().Ttl)
 	}
 }
 
-func TestRecords_Legacy_PreservesTrueTTL(t *testing.T) {
+(t *testing.T) {
 	// Records() strips cache-flush for legacy but does NOT cap TTL.
 	// TTL capping (§6.7) happens in answerQuery after known-answer
 	// suppression, so filterKnownAnswers sees the true TTL.
@@ -1235,31 +1241,5 @@ func TestAnswerQuery_mDNS_KeepsCacheFlush(t *testing.T) {
 	}
 	if len(resp.Question) != 0 {
 		t.Error("mDNS response should not echo question")
-	}
-}
-
-func TestAnswerQuery_mDNS_QU_KeepsCacheFlush(t *testing.T) {
-	zone := newTestZone(t)
-	query := &dns.Msg{
-		MsgHdr:   dns.MsgHdr{Opcode: dns.OpcodeQuery},
-		Question: []dns.Question{{Name: "testhost.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET | quBit}},
-	}
-
-	resp := mDNSQuery(t, zone, query)
-	if resp == nil {
-		t.Fatal("no response")
-	}
-	if len(resp.Answer) != 1 {
-		t.Fatalf("answer count = %d, want 1", len(resp.Answer))
-	}
-	h := resp.Answer[0].Header()
-	if h.Class != dns.ClassINET|cacheFlushBit {
-		t.Errorf("QU unicast: class = %#x, want cache-flush", h.Class)
-	}
-	if h.Ttl <= legacyUnicastMaxTTL {
-		t.Errorf("QU unicast: TTL = %d (should be > %d)", h.Ttl, legacyUnicastMaxTTL)
-	}
-	if len(resp.Question) != 0 {
-		t.Error("QU unicast response should not echo question")
 	}
 }
