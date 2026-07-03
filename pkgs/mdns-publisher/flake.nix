@@ -32,8 +32,8 @@
             # Pure-Go build — no C toolchain, no libc linkage.
             env.CGO_ENABLED = 0;
 
-            # trim path & strip debug info for a smaller binary.
-            ldflags = [ "-s" "-w" "-trimpath" ];
+            # strip debug info + symbol table for a smaller binary.
+            ldflags = [ "-s" "-w" ];
 
             meta = with pkgs.lib; {
               description = "Minimal mDNS responder publishing this host's A/AAAA records as <hostname>.local";
