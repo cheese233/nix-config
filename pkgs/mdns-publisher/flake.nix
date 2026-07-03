@@ -25,7 +25,7 @@
             # Hash of the vendored Go module tree. On first build Nix
             # prints the correct SRI; paste it here, or set
             # `nixpkgs.lib.fakeHash` to bootstrap.
-            vendorHash = "";
+            vendorHash = "sha256-WyyJRC+8QVCC5FN6wg8fSwNXgWHbfzgoGqn8X8Ngb0o=";
 
             # Pure-Go build — no C toolchain, no libc linkage.
             env.CGO_ENABLED = 0;
