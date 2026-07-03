@@ -268,11 +268,11 @@
     '';
   };
 
-  # 将 dae 的日志隔离到独立的 journal 命名空间,只存于内存,防止频繁写入硬盘
-  services.journald.settings.Namespaces.dae = {
-    Storage = "volatile";
-    RuntimeMaxFileSize = "5M";
-    RuntimeMaxFiles = 3; # 最多约 15M
-  };
+  environment.etc."systemd/journald@dae.conf".text = ''
+    [Journal]
+    Storage=volatile
+    RuntimeMaxFileSize=5M
+    RuntimeMaxFiles=3
+  '';
   systemd.services.dae.serviceConfig.LogNamespace = "dae";
 }
