@@ -450,25 +450,6 @@ func TestRecords_Legacy_PreservesTrueTTL(t *testing.T) {
 	}
 }
 
-(t *testing.T) {
-	// Records() strips cache-flush for legacy but does NOT cap TTL.
-	// TTL capping (§6.7) happens in answerQuery after known-answer
-	// suppression, so filterKnownAnswers sees the true TTL.
-	records := []dns.RR{mustA(t, "host.local.", "10.0.0.1", 120)}
-	zone := &hostnameZone{
-		records: records,
-		nsec:    buildNSEC("host.local.", records, 120),
-	}
-	q := dns.Question{Name: "host.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
-	recs := zone.Records(q, true)
-	if len(recs) != 1 {
-		t.Fatalf("got %d, want 1", len(recs))
-	}
-	if recs[0].Header().Ttl != 120 {
-		t.Errorf("legacy TTL = %d, want 120 (true value)", recs[0].Header().Ttl)
-	}
-}
-
 func TestRecords_Legacy_TTLAlreadyLow(t *testing.T) {
 	records := []dns.RR{mustA(t, "host.local.", "10.0.0.1", 5)}
 	zone := &hostnameZone{records: records, nsec: buildNSEC("host.local.", records, 5)}
