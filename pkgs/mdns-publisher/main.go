@@ -286,7 +286,6 @@ func main() {
 	ifaceName := flag.String("iface", "", "interface to bind mDNS to (required)")
 	hostnameOverride := flag.String("hostname", "", "hostname (without .local) to advertise; empty = system hostname")
 	ttl := flag.Uint("ttl", 120, "TTL in seconds for A/AAAA records (1-86400)")
-	refresh := flag.Duration("refresh", 60*time.Second, "alive log interval")
 	skipProbe := flag.Bool("skip-probe", false, "skip RFC 6762 §8.1 probing (NOT compliant)")
 	skipAnnounce := flag.Bool("skip-announce", false, "skip RFC 6762 §8.3 announcing")
 	skipGoodbye := flag.Bool("skip-goodbye", false, "skip RFC 6762 §10.1 goodbye on shutdown")
@@ -414,23 +413,6 @@ func main() {
 
 	log.Printf("server running; waiting for signal")
 
-	// Liveness ticker.
-	livenessDone := make(chan struct{})
-	livenessQuit := make(chan struct{})
-	go func() {
-		defer close(livenessDone)
-		t := time.NewTicker(*refresh)
-		defer t.Stop()
-		for {
-			select {
-			case <-t.C:
-				log.Printf("alive (%d record(s) for %s)", len(records), fqdn)
-			case <-livenessQuit:
-				return
-			}
-		}
-	}()
-
 	// Wait for signal.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -442,12 +424,10 @@ func main() {
 		runGoodbye(server, records)
 	}
 
-	// Stop server, then signal liveness goroutine to exit and wait for it.
+	// Stop server, then shut down.
 	if err := server.Shutdown(); err != nil {
 		log.Printf("server shutdown: %v", err)
 	}
-	close(livenessQuit)
-	<-livenessDone
 	log.Printf("shutting down")
 }
 
