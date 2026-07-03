@@ -145,12 +145,26 @@ func main() {
 		log.Fatalf("hostname %q invalid: must be 1-%d chars of [A-Za-z0-9-]", hostname, maxLabelLen)
 	}
 
-	iface, err := net.InterfaceByName(*ifaceName)
+	// NB: we deliberately avoid net.InterfaceByName() / net.Interfaces().
+	// Both go through Go stdlib's linkAddrTable(), which on this
+	// br-lan (bridge + dynamic delegated IPv6 address) fails with
+	// "netlinkrib: address family not supported by protocol" because
+	// it cannot parse the netlink RTM_GETADDR response. vishvananda/netlink
+	// handles those cases correctly, so we use it for everything.
+	link, err := netlink.LinkByName(*ifaceName)
 	if err != nil {
-		log.Fatalf("interface %s: %v", *ifaceName, err)
+		log.Fatalf("netlink.LinkByName(%s): %v", *ifaceName, err)
+	}
+	// hashicorp/mdns's server config needs a *net.Interface (only
+	// .Index and .Name are used by net.ListenMulticastUDP). Build a
+	// minimal one from the netlink link.
+	iface := &net.Interface{
+		Index: link.Attrs().Index,
+		Name:  link.Attrs().Name,
+		MTU:   link.Attrs().MTU,
 	}
 
-	ips, err := getInterfaceIPs(iface)
+	ips, err := getInterfaceIPs(link)
 	if err != nil {
 		log.Fatalf("addrs: %v", err)
 	}
@@ -266,21 +280,17 @@ func main() {
 	log.Printf("shutting down")
 }
 
-// getInterfaceIPs returns the IP addresses of iface using vishvananda/netlink.
+// getInterfaceIPs returns the IP addresses of link using vishvananda/netlink.
 // This library is used instead of net.Interface.Addrs() because the Go
 // stdlib has known issues parsing netlink responses on certain
 // bridge/VRF/netns configurations (e.g. "netlinkrib: address family
 // not supported by protocol"); netlink (used by Docker, Kubernetes,
 // etc.) handles those cases robustly. We pass family=0 to get both
 // AF_INET and AF_INET6 addresses.
-func getInterfaceIPs(iface *net.Interface) ([]net.IP, error) {
-	link, err := netlink.LinkByName(iface.Name)
-	if err != nil {
-		return nil, fmt.Errorf("netlink.LinkByName(%s): %w", iface.Name, err)
-	}
+func getInterfaceIPs(link netlink.Link) ([]net.IP, error) {
 	addrs, err := netlink.AddrList(link, 0)
 	if err != nil {
-		return nil, fmt.Errorf("netlink.AddrList(%s): %w", iface.Name, err)
+		return nil, fmt.Errorf("netlink.AddrList(%s): %w", link.Attrs().Name, err)
 	}
 	var ips []net.IP
 	for _, a := range addrs {
