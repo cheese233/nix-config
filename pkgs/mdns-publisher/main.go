@@ -17,6 +17,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"math/rand"
 	"net"
@@ -28,6 +29,7 @@ import (
 
 	"github.com/hashicorp/mdns"
 	"github.com/miekg/dns"
+	"github.com/vishvananda/netlink"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -148,7 +150,7 @@ func main() {
 		log.Fatalf("interface %s: %v", *ifaceName, err)
 	}
 
-	addrs, err := iface.Addrs()
+	ips, err := getInterfaceIPs(iface)
 	if err != nil {
 		log.Fatalf("addrs: %v", err)
 	}
@@ -158,14 +160,7 @@ func main() {
 
 	// Build records with cache-flush bit set (RFC 6762 §10.2).
 	var records []dns.RR
-	for _, a := range addrs {
-		var ip net.IP
-		switch v := a.(type) {
-		case *net.IPNet:
-			ip = v.IP
-		case *net.IPAddr:
-			ip = v.IP
-		}
+	for _, ip := range ips {
 		if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLoopback() {
 			continue
 		}
@@ -269,6 +264,32 @@ func main() {
 	}
 	<-livenessDone
 	log.Printf("shutting down")
+}
+
+// getInterfaceIPs returns the IP addresses of iface using vishvananda/netlink.
+// This library is used instead of net.Interface.Addrs() because the Go
+// stdlib has known issues parsing netlink responses on certain
+// bridge/VRF/netns configurations (e.g. "netlinkrib: address family
+// not supported by protocol"); netlink (used by Docker, Kubernetes,
+// etc.) handles those cases robustly. We pass family=0 to get both
+// AF_INET and AF_INET6 addresses.
+func getInterfaceIPs(iface *net.Interface) ([]net.IP, error) {
+	link, err := netlink.LinkByName(iface.Name)
+	if err != nil {
+		return nil, fmt.Errorf("netlink.LinkByName(%s): %w", iface.Name, err)
+	}
+	addrs, err := netlink.AddrList(link, 0)
+	if err != nil {
+		return nil, fmt.Errorf("netlink.AddrList(%s): %w", iface.Name, err)
+	}
+	var ips []net.IP
+	for _, a := range addrs {
+		if a.IPNet == nil || a.IPNet.IP == nil {
+			continue
+		}
+		ips = append(ips, a.IPNet.IP)
+	}
+	return ips, nil
 }
 
 // openSenderSockets creates outbound multicast sockets scoped to iface.
