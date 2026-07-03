@@ -143,6 +143,7 @@
       dualstack-ip-selection = false;
       "force-AAAA-SOA" = false;
       conf-file = "/etc/smartdns/china-rules.conf";
+      mdns-lookup = true;
     };
   };
 
@@ -196,8 +197,24 @@
       nat64-to-wan = { from = [ "nat64" ]; to = [ "wan" ]; verdict = "accept"; masquerade = true; };
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
+      lan-to-fw-mdns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 5353 ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
+  };
+
+  # ==================== mDNS ====================
+  # Local mDNS responder: publishes this host's A/AAAA records as
+  # `nixos.local` on br-lan. Pairs with smartdns's `mdns-lookup yes`
+  # below so LAN clients can resolve `nixos.local` via the router's
+  # smartdns (mDNS-aware unicast), without each client needing its own
+  # mDNS stack.
+  #
+  # Module provided by the ./pkgs/mdns-publisher flake (pure Go,
+  # no CGO). openFirewall is off because we use nftables below;
+  # the lan-to-fw-mdns rule opens UDP 5353 on br-lan.
+  services.mdns-publisher = {
+    enable = true;
+    interface = "br-lan";
   };
 
   # ==================== DAE ====================
@@ -211,7 +228,7 @@
       global {
         tproxy_port: 10800
         wan_interface: ppp0 # Use "auto" to auto detect WAN interface.
-        lan_interface: br-lan,nat64
+        lan_interface: br-lan
 
         log_level: info
         allow_insecure: false
@@ -245,10 +262,17 @@
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
-        # dip('64:ff9b::/96') -> direct
 
         fallback: proxy
       }
     '';
   };
+
+  # 将 dae 的日志隔离到独立的 journal 命名空间,只存于内存,防止频繁写入硬盘
+  services.journald.settings.Namespaces.dae = {
+    Storage = "volatile";
+    RuntimeMaxFileSize = "5M";
+    RuntimeMaxFiles = 3; # 最多约 15M
+  };
+  systemd.services.dae.serviceConfig.LogNamespace = "dae";
 }

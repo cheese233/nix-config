@@ -2,7 +2,7 @@
   description = "A SecureBoot-enabled NixOS configuration module";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
     lanzaboote = {
       url = "github:nix-community/lanzaboote/v1.1.0";
