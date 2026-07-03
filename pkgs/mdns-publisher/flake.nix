@@ -8,8 +8,6 @@
       supportedSystems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
-        "aarch64-darwin"
       ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
     in
@@ -35,6 +33,10 @@
             # strip debug info + symbol table for a smaller binary.
             ldflags = [ "-s" "-w" ];
 
+            # Run `go test ./...` during the build.  Tests that need
+            # port 5353 automatically skip in the Nix sandbox.
+            doCheck = true;
+
             meta = with pkgs.lib; {
               description = "Minimal mDNS responder publishing this host's A/AAAA records as <hostname>.local";
               longDescription = ''
@@ -53,10 +55,15 @@
               license = licenses.mit;
               mainProgram = "mdns-publisher";
               maintainers = [ ];
-              platforms = platforms.unix;
+              platforms = platforms.linux;
             };
           };
         });
+
+      # `nix flake check` runs the test suite.
+      checks = forAllSystems (system: {
+        default = self.packages.${system}.default;
+      });
 
       # Standalone-isable NixOS module.
       #

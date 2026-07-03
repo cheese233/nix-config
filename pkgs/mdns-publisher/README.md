@@ -13,11 +13,16 @@ Pair it with smartdns's `mdns-lookup yes` so any LAN client (even ones
 without their own mDNS stack) can resolve this host by querying the
 router's DNS server instead of multicasting on their own.
 
+The implementation follows RFC 6762: probing with conflict detection,
+cache-flush announcements, legacy-unicast handling, known-answer
+suppression, and NSEC negative responses.
+
 ## Build
 
-Pure Go, no CGO. The only external Go modules are
-[`github.com/hashicorp/mdns`](https://github.com/hashicorp/mdns) and
-[`github.com/miekg/dns`](https://github.com/miekg/dns).
+Pure Go, no CGO. The external Go modules are
+[`github.com/miekg/dns`](https://github.com/miekg/dns),
+[`github.com/vishvananda/netlink`](https://github.com/vishvananda/netlink), and
+[`golang.org/x/net`](https://pkg.go.dev/golang.org/x/net).
 
 ```sh
 nix build .#default
