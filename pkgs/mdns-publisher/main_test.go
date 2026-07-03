@@ -179,14 +179,14 @@ func TestRRLess_ClassOrder(t *testing.T) {
 		A:   net.ParseIP("10.0.0.1").To4(),
 	}
 	r2 := &dns.A{
-		Hdr: dns.RR_Header{Name: "a.local.", Rrtype: dns.TypeA, Class: dns.ClassINET | 0x01, Ttl: 120},
+		Hdr: dns.RR_Header{Name: "a.local.", Rrtype: dns.TypeA, Class: dns.ClassCHAOS, Ttl: 120},
 		A:   net.ParseIP("10.0.0.1").To4(),
 	}
 	if !rrLess(r1, r2) {
-		t.Error("IN < IN+1")
+		t.Error("IN (1) < CHAOS (3)")
 	}
 	if rrLess(r2, r1) {
-		t.Error("IN+1 not < IN")
+		t.Error("CHAOS not < IN")
 	}
 }
 
@@ -376,12 +376,13 @@ func TestRecords_NSEC_Legacy(t *testing.T) {
 		t.Fatalf("got %d records, want 1", len(recs))
 	}
 	h := recs[0].Header()
-	// Legacy: no cache-flush, TTL ≤ 10.
+	// Legacy: no cache-flush bit, but TTL is preserved (capping
+	// happens in answerQuery after known-answer suppression).
 	if h.Class != dns.ClassINET {
 		t.Errorf("legacy NSEC class = %#x, want INET", h.Class)
 	}
-	if h.Ttl > legacyUnicastMaxTTL {
-		t.Errorf("legacy NSEC TTL = %d, want ≤ %d", h.Ttl, legacyUnicastMaxTTL)
+	if h.Ttl != 120 {
+		t.Errorf("legacy NSEC TTL = %d, want 120 (true value)", h.Ttl)
 	}
 }
 
@@ -430,8 +431,23 @@ func TestRecords_Legacy_StripsCacheFlush(t *testing.T) {
 	}
 }
 
-func TestRecords_Legacy_CapsTTL(t *testing.T) {
-	// Zone with TTL > 10.
+func TestRecords_Legacy_StripsCacheFlush(t *testing.T) {
+	zone := newTestZone(t)
+	q := dns.Question{Name: "testhost.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET}
+	recs := zone.Records(q, true) // legacy
+	if len(recs) != 1 {
+		t.Fatalf("got %d, want 1", len(recs))
+	}
+	h := recs[0].Header()
+	if h.Class != dns.ClassINET {
+		t.Errorf("legacy A class = %#x, want INET (no cache-flush)", h.Class)
+	}
+}
+
+func TestRecords_Legacy_PreservesTrueTTL(t *testing.T) {
+	// Records() strips cache-flush for legacy but does NOT cap TTL.
+	// TTL capping (§6.7) happens in answerQuery after known-answer
+	// suppression, so filterKnownAnswers sees the true TTL.
 	records := []dns.RR{mustA(t, "host.local.", "10.0.0.1", 120)}
 	zone := &hostnameZone{
 		records: records,
@@ -442,8 +458,8 @@ func TestRecords_Legacy_CapsTTL(t *testing.T) {
 	if len(recs) != 1 {
 		t.Fatalf("got %d, want 1", len(recs))
 	}
-	if recs[0].Header().Ttl > legacyUnicastMaxTTL {
-		t.Errorf("legacy TTL = %d, want ≤ %d", recs[0].Header().Ttl, legacyUnicastMaxTTL)
+	if recs[0].Header().Ttl != 120 {
+		t.Errorf("legacy TTL = %d, want 120 (true value)", recs[0].Header().Ttl)
 	}
 }
 
@@ -683,8 +699,9 @@ func TestTheyWinTiebreak_DifferentAAAA(t *testing.T) {
 	s := newTestServerForTiebreak(t, our, "host.local.")
 
 	their := []dns.RR{mustAAAA(t, "host.local.", "fd00::2", 255)}
-	if !s.theyWinTiebreak(their) {
-		t.Error("fd00::1 > fd00::2: they should win")
+	// fd00::1 < fd00::2 → we win → they should NOT win.
+	if s.theyWinTiebreak(their) {
+		t.Error("fd00::1 < fd00::2: they should not win")
 	}
 }
 
@@ -1191,9 +1208,12 @@ func mDNSQuery(t *testing.T, zone *hostnameZone, query *dns.Msg) *dns.Msg {
 
 func TestAnswerQuery_mDNS_KeepsCacheFlush(t *testing.T) {
 	zone := newTestZone(t)
+	// Use QU bit so the response is sent via unicast (works in sandbox
+	// without multicast).  For a non-QU query the response would be
+	// multicast, which is not reachable in the Nix build sandbox.
 	query := &dns.Msg{
 		MsgHdr:   dns.MsgHdr{Opcode: dns.OpcodeQuery},
-		Question: []dns.Question{{Name: "testhost.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET}},
+		Question: []dns.Question{{Name: "testhost.local.", Qtype: dns.TypeA, Qclass: dns.ClassINET | quBit}},
 	}
 
 	resp := mDNSQuery(t, zone, query)

@@ -114,11 +114,11 @@ func (z *hostnameZone) Records(q dns.Question, legacy bool) []dns.RR {
 		rCopy := dns.Copy(r)
 		if legacy {
 			// §6.7: legacy unicast responses MUST NOT have the
-			// cache-flush bit, and SHOULD have TTL ≤ 10s.
+			// cache-flush bit.  TTL capping is applied later in
+			// answerQuery, after known-answer suppression, so that
+			// filterKnownAnswers compares against the true TTL
+			// (RFC 6762 §7.1).
 			rCopy.Header().Class = dns.ClassINET
-			if rCopy.Header().Ttl > legacyUnicastMaxTTL {
-				rCopy.Header().Ttl = legacyUnicastMaxTTL
-			}
 		}
 		out = append(out, rCopy)
 	}
@@ -131,9 +131,6 @@ func (z *hostnameZone) Records(q dns.Question, legacy bool) []dns.RR {
 		rCopy := dns.Copy(z.nsec)
 		if legacy {
 			rCopy.Header().Class = dns.ClassINET
-			if rCopy.Header().Ttl > legacyUnicastMaxTTL {
-				rCopy.Header().Ttl = legacyUnicastMaxTTL
-			}
 		}
 		out = append(out, rCopy)
 	}
@@ -722,6 +719,16 @@ func (s *mdnsServer) answerQuery(msg *dns.Msg, from *net.UDPAddr, conn *net.UDPC
 		records = s.zone.filterKnownAnswers(records, msg.Answer)
 		if len(records) == 0 {
 			continue
+		}
+		if legacy {
+			// §6.7: TTL SHOULD NOT be greater than ten seconds.
+			// Applied after known-answer suppression so that
+			// filterKnownAnswers compares against the true TTL.
+			for _, r := range records {
+				if r.Header().Ttl > legacyUnicastMaxTTL {
+					r.Header().Ttl = legacyUnicastMaxTTL
+				}
+			}
 		}
 		if legacy || (q.Qclass&quBit != 0) {
 			unicastAnswer = append(unicastAnswer, records...)
