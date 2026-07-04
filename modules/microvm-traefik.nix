@@ -1,7 +1,7 @@
 { config, lib, pkgs, inputs, ... }:
 
 let
-  vmIPv6 = "fdea:d:beef::7a";
+
   tapId = "vm-traefik";
 in
 {
@@ -60,7 +60,7 @@ in
           {
             type = "tap";
             id = tapId;
-            mac = "02:00:00:00:00:7a";
+            mac = "02:00:00:77:65:62";
             # vhost-net acceleration is qemu-only and gives ~10 Gbps vs ~1.5 Gbps.
             tap.vhost = true;
           }
@@ -85,7 +85,6 @@ in
           IPv6AcceptRA = true;
           DNS = [ "fdea:d:beef::1" ];
         };
-        addresses = [ { Address = "${vmIPv6}/64"; } ];
       };
 
       # Traefik reverse proxy / edge router.
@@ -168,6 +167,39 @@ in
   systemd.services."microvm@traefik" = {
     after = [ "agenix.service" ];
     wants = [ "agenix.service" ];
+  };
+
+  age.secrets.traefik-env = {
+    file = ../secrets/traefik-env.age;
+    path = "/var/lib/microvms/traefik/traefik-data/traefik-env";
+    owner = "root";
+    group = "traefik";
+    mode = "0640";
+  };
+
+  systemd.tmpfiles.rules = [
+    # Link Traefik MicroVM journals so host's journalctl --merge can see them
+    "L+ /var/log/journal/traefik000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/traefik000000000000000000000000"
+  ];
+
+  # DMZ: allow all traffic from WAN to Traefik VM.
+  # Matches by EUI-64 interface ID derived from MAC 02:00:00:00:00:7a,
+  # so it works regardless of the delegated prefix.
+  networking.nftables.firewall = {
+    zones.traefik = {
+      parent = "lan";
+      ingressExpression = [
+        "ip6 saddr & ::ffff:ffff:ffff:ffff == ::ff:fe77:6562"
+      ];
+      egressExpression = [
+        "ip6 daddr & ::ffff:ffff:ffff:ffff == ::ff:fe77:6562"
+      ];
+    };
+    rules.wan-to-traefik = {
+      from = [ "wan" ];
+      to = [ "traefik" ];
+      verdict = "accept";
+    };
   };
 
   # Start the Traefik MicroVM automatically on host boot.

@@ -38,13 +38,6 @@
       file = ../secrets/dae-sub.age;
       path = "/etc/dae/local.sub";
     };
-    secrets.traefik-env = {
-      file = ../secrets/traefik-env.age;
-      path = "/var/lib/microvms/traefik/traefik-data/traefik-env";
-      owner = "root";
-      group = "traefik";
-      mode = "0640";
-    };
   };
 
   # ==================== PPPoE ====================
@@ -62,7 +55,6 @@
           maxfail 0
           holdoff 5
           defaultroute
-          usepeerdns
           mtu 1492
           +ipv6
           ipv6cp-accept-local
@@ -71,14 +63,6 @@
       };
     };
   };
-
-  environment.etc."ppp/resolv.conf".source = "/run/ppp/resolv.conf";
-  systemd.tmpfiles.rules = [
-    "d /run/ppp 0755 root root -"
-    "f /run/ppp/resolv.conf 0644 root root -"
-    # Link Traefik MicroVM journals so host's journalctl --merge can see them
-    "L+ /var/log/journal/traefik000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/traefik000000000000000000000000"
-  ];
 
   systemd.services."pppd-pppoe" = {
     after = [ "agenix.service" ];
