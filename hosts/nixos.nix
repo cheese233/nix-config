@@ -144,10 +144,6 @@
 
       # 3. Custom Lua script for advanced policy routing & domestic split-tunneling
       lua.script = ''
-        -- Disable DNSSEC validation since DNS64 breaks DNSSEC for synthesized records,
-        -- and the router is IPv6-only (cannot reach IPv4-only trust anchor servers).
-        trust_anchors.remove('.')
-
         -- Load required modules
         modules = {
           'policy',
