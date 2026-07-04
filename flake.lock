@@ -347,8 +347,7 @@
         "microvm": "microvm",
         "nixpkgs": "nixpkgs_2",
         "nnf": "nnf",
-        "secureboot": "secureboot",
-        "smartdns": "smartdns"
+        "secureboot": "secureboot"
       }
     },
     "rust-overlay": {
@@ -386,22 +385,6 @@
       },
       "original": {
         "path": "./pkgs/secureboot",
-        "type": "path"
-      },
-      "parent": []
-    },
-    "smartdns": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "path": "./pkgs/smartdns",
-        "type": "path"
-      },
-      "original": {
-        "path": "./pkgs/smartdns",
         "type": "path"
       },
       "parent": []
