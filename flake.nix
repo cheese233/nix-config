@@ -16,6 +16,10 @@
       url = "./pkgs/mdns-publisher";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    microvm = {
+      url = "github:microvm-nix/microvm.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = { self, nixpkgs, ... }@inputs:
@@ -28,9 +32,6 @@
         hostFile
         inputs.secureboot.nixosModules.default
         inputs.agenix.nixosModules.default
-        inputs.nnf.nixosModules.default
-        inputs.dae.nixosModules.dae
-        inputs.mdns-publisher.nixosModules.default
         { environment.systemPackages = [ inputs.agenix.packages.x86_64-linux.default ]; }
       ];
     };

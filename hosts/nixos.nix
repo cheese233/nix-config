@@ -4,6 +4,11 @@
   imports = [
     ../hardware/nixos.nix
     ../modules/zfs-kernel.nix
+    inputs.microvm.nixosModules.host
+    inputs.nnf.nixosModules.default
+    inputs.dae.nixosModules.dae
+    inputs.mdns-publisher.nixosModules.default
+    ../modules/microvm-traefik.nix
   ];
 
   networking.hostName = "nixos";
@@ -32,6 +37,13 @@
     secrets.dae-sub = {
       file = ../secrets/dae-sub.age;
       path = "/etc/dae/local.sub";
+    };
+    secrets.traefik-env = {
+      file = ../secrets/traefik-env.age;
+      path = "/var/lib/microvms/traefik/traefik-data/traefik-env";
+      owner = "root";
+      group = "traefik";
+      mode = "0640";
     };
   };
 
@@ -64,6 +76,8 @@
   systemd.tmpfiles.rules = [
     "d /run/ppp 0755 root root -"
     "f /run/ppp/resolv.conf 0644 root root -"
+    # Link Traefik MicroVM journals so host's journalctl --merge can see them
+    "L+ /var/log/journal/traefik000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/traefik000000000000000000000000"
   ];
 
   systemd.services."pppd-pppoe" = {
