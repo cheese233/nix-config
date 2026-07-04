@@ -8,7 +8,6 @@
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
     inputs.mdns-publisher.nixosModules.default
-    inputs.mdns-repeater.nixosModules.default
     ../modules/microvm-traefik.nix
   ];
 
@@ -145,6 +144,10 @@
 
       # 3. Custom Lua script for advanced policy routing & domestic split-tunneling
       lua.script = ''
+        -- Disable DNSSEC validation since DNS64 breaks DNSSEC for synthesized records,
+        -- and the router is IPv6-only (cannot reach IPv4-only trust anchor servers).
+        trust_anchors.remove('.')
+
         -- Load required modules
         modules = {
           'policy',
@@ -163,10 +166,11 @@
           '8.8.4.4'
         })
 
-        -- Default fallback routing to foreign group
-        policy.add(policy.all(foreign_dns_group))
+        -- 1. Stub for .local queries to systemd-resolved (mDNS)
+        local local_dns_stub = policy.STUB({'127.0.0.53'})
+        policy.add(policy.suffix(local_dns_stub, policy.todnames({'local.'})))
 
-        -- Load china-domain-list for domestic split-tunneling
+        -- 2. Load china-domain-list for domestic split-tunneling
         local china_domains = {}
         local file = io.open("/etc/knot-resolver/china-domain-list.txt", "r")
         if file then
@@ -181,20 +185,25 @@
         if #china_domains > 0 then
           policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
         end
+
+        -- 3. Default fallback routing to foreign group (MUST BE LAST!)
+        policy.add(policy.all(foreign_dns_group))
       '';
     };
   };
 
-  # ==================== mDNS Repeater ====================
-  # geekman/mdns-repeater is used to repeat mDNS multicast packets between DIFFERENT
-  # Layer 2 network segments (e.g. br-lan and a separate guest/IoT interface like wlan0).
-  # 
-  # NOTE: Since the vm-traefik MicroVM is directly bridged as a port of br-lan, the Linux kernel
-  # bridge natively forwards mDNS multicast packets between them. Therefore, vm-traefik should NOT
-  # be listed here.
-  services.mdns-repeater = {
+  # ==================== systemd-resolved ====================
+  # Configured to act as an mDNS client/resolver on local interfaces,
+  # but NOT as a responder/announcer (which is handled by mdns-publisher).
+  services.resolved = {
     enable = true;
-    interfaces = [ "br-lan" "wlan0" ]; # Replace wlan0 with your other local interfaces (e.g. IoT VLAN)
+    settings = {
+      Resolve = {
+        MulticastDNS = "resolve";
+        DNS = [ "::1" "127.0.0.1" ];
+        Domains = [ "~." ];
+      };
+    };
   };
 
   # ==================== NAT64 ====================
@@ -252,9 +261,9 @@
 
   # ==================== mDNS ====================
   # Local mDNS responder: publishes this host's A/AAAA records as
-  # `nixos.local` on br-lan. Pairs with mdns-repeater below so mDNS
-  # packets can be repeated across local segments (e.g., LAN and MicroVM tap),
-  # allowing native mDNS clients to resolve `.local` domains smoothly.
+  # `nixos.local` on br-lan. Works in tandem with systemd-resolved
+  # (which resolves .local via unicast-forwarded mDNS), allowing native
+  # clients to resolve local names smoothly without needing L2 bridging.
   #
   # Module provided by the ./pkgs/mdns-publisher flake (pure Go,
   # no CGO). openFirewall is off because we use nftables below;
