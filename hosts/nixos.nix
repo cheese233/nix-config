@@ -190,7 +190,7 @@
     # nnf-ssh and nnf-nixos-firewall default to `from = "all"`, exposing sshd
     # to wan. Override both to lan-only below.
     snippets.nnf-ssh.enable = false;
-    rules.nixos-firewall.from = lib.mkForce "lan";
+    rules.nixos-firewall.from = lib.mkForce [ "lan" ];
     zones = {
       wan = { interfaces = [ "ppp0" ]; };
       lan = { interfaces = [ "br-lan" ]; };

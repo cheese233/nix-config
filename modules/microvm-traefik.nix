@@ -14,6 +14,9 @@ in
       # Publish this VM as `traefik.local` on the LAN via mDNS, so the
       # host's smartdns (mdns-lookup) can resolve it without a static entry.
       imports = [ inputs.mdns-publisher.nixosModules.default ];
+
+      networking.usePredictableInterfaceNames = false;
+
       services.mdns-publisher = {
         enable = true;
         interface = "eth0";
@@ -43,6 +46,8 @@ in
       # gets created. microvm.nix's default initrd modules omit these.
       boot.initrd.kernelModules = [ "vsock" "vmw_vsock_virtio_transport" ];
       boot.kernelModules = [ "vsock" "vmw_vsock_virtio_transport" ];
+
+      services.resolved.enable = false;
 
       # Minimal base: systemd-networkd is enabled via microvm.optimize by default,
       # but we declare it explicitly below.
@@ -115,6 +120,7 @@ in
         networkConfig = {
           DHCP = "no";
           IPv6AcceptRA = true;
+          IPv6PrivacyExtensions = "no";
           DNS = [ "fdea:d:beef::1" ];
         };
       };
@@ -196,6 +202,8 @@ in
       # console getty. Safe because no TCP listener is exposed.
       services.openssh.settings.PermitRootLogin = "yes";
       services.openssh.settings.PasswordAuthentication = true;
+      services.openssh.settings.PermitEmptyPasswords = "yes";
+      security.pam.services.sshd.allowNullPassword = true;
       users.users.root.password = "";
       services.getty.autologinUser = "root";
 
@@ -247,6 +255,18 @@ in
       from = [ "lan" ];
       to = [ "traefik" ];
       allowedUDPPorts = [ 5353 ];
+      extraLines = [
+        "ip6 daddr ff02::fb udp dport 5353 accept"
+      ];
+    };
+
+    rules.traefik-to-fw-mdns = {
+      from = [ "traefik" ];
+      to = [ "fw" ];
+      allowedUDPPorts = [ 5353 ];
+      extraLines = [
+        "ip6 daddr ff02::fb udp dport 5353 accept"
+      ];
     };
   };
 
