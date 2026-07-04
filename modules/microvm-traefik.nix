@@ -11,9 +11,8 @@ in
     inherit pkgs;
 
     config = {
-      # Publish this VM as `traefik.local` over mDNS on the LAN interface,
-      # so smartdns on the host (mdns-lookup) can resolve `traefik.local`
-      # to the VM's IPv6 address without a static DNS entry.
+      # Publish this VM as `traefik.local` on the LAN via mDNS, so the
+      # host's smartdns (mdns-lookup) can resolve it without a static entry.
       imports = [ inputs.mdns-publisher.nixosModules.default ];
       services.mdns-publisher = {
         enable = true;
@@ -22,19 +21,36 @@ in
         openFirewall = true;
       };
 
+      # microvm.nix disables systemd-networkd-wait-online for boot speed
+      # (optimization.nix), which makes network-online.target fire almost
+      # instantly — before eth0 actually exists. mdns-publisher's own
+      # `after network-online.target` then races and fails with
+      # "Link not found". Gate it on the eth0 device unit instead, which
+      # only becomes active once udev has registered the interface.
+      systemd.services.mdns-publisher = {
+        after = [ "sys-subsystem-net-devices-eth0.device" ];
+        bindsTo = [ "sys-subsystem-net-devices-eth0.device" ];
+      };
+
       networking.hostName = "traefik";
       system.stateVersion = "26.05";
 
-      # Fixed machine-id so host can identify this VM's journals (hex only)
+      # Fixed machine-id so the host can identify this VM's journals.
       microvm.machineId = "70aef1c0-0000-0000-0000-000000000000";
+
+      # VSOCK needs the virtio transport loaded before systemd-ssh-generator
+      # runs, otherwise AF_VSOCK is undetectable and sshd-vsock.socket never
+      # gets created. microvm.nix's default initrd modules omit these.
+      boot.initrd.kernelModules = [ "vsock" "vmw_vsock_virtio_transport" ];
+      boot.kernelModules = [ "vsock" "vmw_vsock_virtio_transport" ];
 
       # Minimal base: systemd-networkd is enabled via microvm.optimize by default,
       # but we declare it explicitly below.
       microvm = {
         hypervisor = "qemu";
 
-        # VSOCK backdoor: `microvm -s traefik` from the host sshes in over
-        # AF_VSOCK without needing network/Login access. CID 3 (0/1/2 reserved).
+        # SSH backdoor reachable from the host via `microvm -s traefik`
+        # (= `ssh vsock/3`), no network path needed. CIDs 0-2 are reserved.
         vsock.cid = 3;
         vsock.ssh.enable = true;
         vcpu = 2;
@@ -164,16 +180,18 @@ in
       };
       users.groups.traefik = {};
 
-      # microvm.vsock.ssh.enable pulls in services.openssh.enable so sshd
-      # listens on VSOCK::22 (reachable from the host via `microvm -s traefik`).
-      # sshd also binds a network socket on :22, but the firewall below only
-      # opens 80/443, so :22 is unreachable from the LAN/WAN. Allow root login
-      # (no password) so VSOCK ssh and the serial-console getty both work.
+      # microvm.vsock.ssh.enable turns on openssh, but the openssh module's
+      # own TCP listener (sshd.socket) is unwanted here — only the vsock
+      # socket that systemd-ssh-generator creates at boot (sshd-vsock.socket
+      # on vsock::22) should remain. Switch to socket activation and disable
+      # the TCP socket, leaving sshd spawned per-connection over VSOCK only.
+      services.openssh.startWhenNeeded = true;
+      systemd.sockets.sshd.enable = false;
+
+      # Empty-password root login for the VSOCK ssh path and the serial
+      # console getty. Safe because no TCP listener is exposed.
       services.openssh.settings.PermitRootLogin = "yes";
       services.openssh.settings.PasswordAuthentication = true;
-
-      # Access the VM via `microvm -s traefik` (VSOCK ssh) or the QEMU serial
-      # console from the host; root has an empty password for both.
       users.users.root.password = "";
       services.getty.autologinUser = "root";
 
@@ -185,28 +203,26 @@ in
     };
   };
 
+  # Decrypt directly to `path` (not a symlink into /run/agenix on the
+  # host): the VM reads it through a virtiofs share of traefik-data/, and
+  # virtiofsd can't follow symlinks pointing outside the shared directory.
   age.secrets.traefik-env = {
     file = ../secrets/traefik-env.age;
     path = "/var/lib/microvms/traefik/traefik-data/traefik-env";
     owner = "root";
     group = "root";
     mode = "0640";
-    # Decrypt as a regular file directly at `path` instead of a symlink
-    # into /run/agenix (host ramfs). The Traefik MicroVM reads this file
-    # through a virtiofs share of traefik-data/, and virtiofsd cannot
-    # resolve a symlink whose target lives outside the shared directory.
     symlink = false;
   };
 
   systemd.tmpfiles.rules = [
     "d ${config.microvm.stateDir}/traefik/journal 0755 root root -"
-    # Link Traefik MicroVM journals so host's journalctl --merge can see them
+    # Symlink this VM's journal dir into the host's so `journalctl --merge` sees it.
     "L+ /var/log/journal/70aef1c0000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/70aef1c0000000000000000000000000"
   ];
 
-  # DMZ: allow all traffic from WAN to Traefik VM.
-  # Matches by EUI-64 interface ID derived from MAC 02:00:00:00:00:7a,
-  # so it works regardless of the delegated prefix.
+  # DMZ: allow all WAN traffic to the Traefik VM, matched by the EUI-64
+  # interface ID derived from its MAC so it's independent of the delegated prefix.
   networking.nftables.firewall = {
     zones.traefik = {
       parent = "lan";

@@ -26,13 +26,11 @@
   services.openssh.settings.PermitRootLogin = "yes";
 
   # ==================== MicroVM VSOCK attach ====================
-  # Load the host-side VSOCK driver so guests with microvm.vsock.cid can
-  # expose an SSH backdoor reachable as `ssh vsock/<CID>`.
+  # Host-side pieces for `microvm -s <vm>` (which runs `ssh vsock/<CID>`):
+  #   - load vhost_vsock so guests with microvm.vsock.cid can use AF_VSOCK
+  #   - ssh ProxyCommand that turns `vsock/<CID>` into a real AF_VSOCK
+  #     connection (OpenSSH has no native vsock support)
   boot.kernelModules = [ "vhost_vsock" ];
-
-  # OpenSSH doesn't natively understand a `vsock/<CID>` host; bridge it
-  # to AF_VSOCK with socat. This is what `microvm -s <vmname>` relies on
-  # (it just runs `ssh vsock/<CID> -l root`).
   environment.systemPackages = [ pkgs.socat ];
   programs.ssh.extraConfig = ''
     Host vsock/*
@@ -41,7 +39,6 @@
       UserKnownHostsFile /dev/null
       User root
   '';
-
   # ==================== Secrets ====================
   age = {
     identityPaths = [ "/var/lib/agenix/key.txt" ];
