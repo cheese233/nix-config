@@ -180,12 +180,16 @@ in
       };
       users.groups.traefik = {};
 
-      # microvm.vsock.ssh.enable turns on openssh, but the openssh module's
-      # own TCP listener (sshd.socket) is unwanted here — only the vsock
-      # socket that systemd-ssh-generator creates at boot (sshd-vsock.socket
-      # on vsock::22) should remain. Switch to socket activation and disable
-      # the TCP socket, leaving sshd spawned per-connection over VSOCK only.
+      # microvm.vsock.ssh.enable turns on openssh. We want only the
+      # vsock socket that systemd-ssh-generator creates at boot
+      # (sshd-vsock.socket on vsock::22), not openssh's own network
+      # listener. Disable both forms of it:
+      #   - the long-running sshd.service (!startWhenNeeded path)
+      #   - the TCP sshd.socket (startWhenNeeded path)
+      # sshd-keygen.service and the sshd@ per-connection template stay,
+      # which is what sshd-vsock@.service reuses.
       services.openssh.startWhenNeeded = true;
+      systemd.services.sshd.enable = false;
       systemd.sockets.sshd.enable = false;
 
       # Empty-password root login for the VSOCK ssh path and the serial

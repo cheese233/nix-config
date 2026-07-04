@@ -25,20 +25,9 @@
   };
   services.openssh.settings.PermitRootLogin = "yes";
 
-  # ==================== MicroVM VSOCK attach ====================
-  # Host-side pieces for `microvm -s <vm>` (which runs `ssh vsock/<CID>`):
-  #   - load vhost_vsock so guests with microvm.vsock.cid can use AF_VSOCK
-  #   - ssh ProxyCommand that turns `vsock/<CID>` into a real AF_VSOCK
-  #     connection (OpenSSH has no native vsock support)
+  # Host-side VSOCK support for `microvm -s <vm>` (= `ssh vsock/<CID>`).
+  # The ssh proxy itself is provided by systemd's 20-systemd-ssh-proxy.conf.
   boot.kernelModules = [ "vhost_vsock" ];
-  environment.systemPackages = [ pkgs.socat ];
-  programs.ssh.extraConfig = ''
-    Host vsock/*
-      ProxyCommand socat - VSOCK-CONNECT:$(echo %h | cut -d/ -f2):%p
-      StrictHostKeyChecking no
-      UserKnownHostsFile /dev/null
-      User root
-  '';
   # ==================== Secrets ====================
   age = {
     identityPaths = [ "/var/lib/agenix/key.txt" ];
@@ -198,6 +187,10 @@
   networking.nftables.firewall = {
     enable = true;
     snippets.nnf-common.enable = true;
+    # nnf-ssh and nnf-nixos-firewall default to `from = "all"`, exposing sshd
+    # to wan. Override both to lan-only below.
+    snippets.nnf-ssh.enable = false;
+    rules.nixos-firewall.from = lib.mkForce "lan";
     zones = {
       wan = { interfaces = [ "ppp0" ]; };
       lan = { interfaces = [ "br-lan" ]; };
@@ -210,6 +203,7 @@
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       lan-to-fw-mdns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 5353 ]; };
+      lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
   };
