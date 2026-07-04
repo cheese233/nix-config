@@ -157,8 +157,6 @@ in
         allowedTCPPorts = [ 80 443 ];
       };
 
-      # Ensure journald uses persistent storage for the shared directory
-      systemd.journald.extraConfig = "Storage=persistent";
     };
   };
 
