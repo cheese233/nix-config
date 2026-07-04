@@ -166,6 +166,11 @@ in
     owner = "root";
     group = "root";
     mode = "0640";
+    # Decrypt as a regular file directly at `path` instead of a symlink
+    # into /run/agenix (host ramfs). The Traefik MicroVM reads this file
+    # through a virtiofs share of traefik-data/, and virtiofsd cannot
+    # resolve a symlink whose target lives outside the shared directory.
+    symlink = false;
   };
 
   systemd.tmpfiles.rules = [
