@@ -14,8 +14,8 @@ in
       networking.hostName = "traefik";
       system.stateVersion = "26.05";
 
-      # Fixed machine-id so host can identify this VM's journals
-      microvm.machineId = "traefik000000000000000000000000";
+      # Fixed machine-id so host can identify this VM's journals (hex only)
+      microvm.machineId = "70aef1c0000000000000000000000000";
 
       # Minimal base: systemd-networkd is enabled via microvm.optimize by default,
       # but we declare it explicitly below.
@@ -177,7 +177,7 @@ in
 
   systemd.tmpfiles.rules = [
     # Link Traefik MicroVM journals so host's journalctl --merge can see them
-    "L+ /var/log/journal/traefik000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/traefik000000000000000000000000"
+    "L+ /var/log/journal/70aef1c0000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/70aef1c0000000000000000000000000"
   ];
 
   # DMZ: allow all traffic from WAN to Traefik VM.
