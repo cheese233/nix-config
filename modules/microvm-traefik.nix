@@ -11,6 +11,17 @@ in
     inherit pkgs;
 
     config = {
+      # Publish this VM as `traefik.local` over mDNS on the LAN interface,
+      # so smartdns on the host (mdns-lookup) can resolve `traefik.local`
+      # to the VM's IPv6 address without a static DNS entry.
+      imports = [ inputs.mdns-publisher.nixosModules.default ];
+      services.mdns-publisher = {
+        enable = true;
+        interface = "eth0";
+        hostname = "traefik";
+        openFirewall = true;
+      };
+
       networking.hostName = "traefik";
       system.stateVersion = "26.05";
 
@@ -196,6 +207,12 @@ in
       from = [ "wan" ];
       to = [ "traefik" ];
       verdict = "accept";
+    };
+    # Allow LAN clients to query the Traefik VM's mDNS responder.
+    rules.lan-to-traefik-mdns = {
+      from = [ "lan" ];
+      to = [ "traefik" ];
+      allowedUDPPorts = [ 5353 ];
     };
   };
 
