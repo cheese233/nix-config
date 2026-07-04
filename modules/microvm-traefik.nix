@@ -169,6 +169,7 @@ in
   };
 
   systemd.tmpfiles.rules = [
+    "d ${config.microvm.stateDir}/traefik/journal 0755 root root -"
     # Link Traefik MicroVM journals so host's journalctl --merge can see them
     "L+ /var/log/journal/70aef1c0000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/70aef1c0000000000000000000000000"
   ];
