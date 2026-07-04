@@ -128,55 +128,61 @@
 
   services.knot-resolver = {
     enable = true;
-    extraConfig = ''
-      -- Load required modules
-      modules = {
-        'dns64',     -- IPv6-only transition (NAT64) support
-        'policy',    -- Domain policy forwarding
-        'prefetch',  -- Cache prefetching for active records
-        'hints'      -- Static hosts resolution
-      }
+    settings = {
+      # 1. Bind listener to localhost loopback interfaces and LAN IPv6 gateway address
+      network.listen = [
+        {
+          interface = [ "127.0.0.1" "::1" "fdea:d:beef::1" ];
+          kind = "dns";
+        }
+      ];
 
-      -- 1. Configure DNS64
-      dns64.config({
-        prefix = '64:ff9b::'  -- Same NAT64 prefix as TAYGA
-      })
+      # 2. Configure DNS64
+      dns64 = {
+        enable = true;
+        prefix = "64:ff9b::/96";
+      };
 
-      -- 2. Define DNS groups
-      local china_dns_group = policy.FORWARD({
-        '223.5.5.5',
-        '223.6.6.6'
-      })
+      # 3. Custom Lua script for advanced policy routing & domestic split-tunneling
+      lua.script = ''
+        -- Load required modules
+        modules = {
+          'policy',
+          'prefetch',
+          'hints'
+        }
 
-      local foreign_dns_group = policy.FORWARD({
-        '8.8.8.8',
-        '8.8.4.4'
-      })
+        -- Define DNS groups
+        local china_dns_group = policy.FORWARD({
+          '223.5.5.5',
+          '223.6.6.6'
+        })
 
-      -- 3. Default fallback routing to foreign group
-      policy.add(policy.all(foreign_dns_group))
+        local foreign_dns_group = policy.FORWARD({
+          '8.8.8.8',
+          '8.8.4.4'
+        })
 
-      -- 4. Bind listener to localhost loopback interfaces and LAN IPv6 gateway address
-      net.listen('127.0.0.1', 53)
-      net.listen('::1', 53)
-      net.listen('fdea:d:beef::1', 53)
+        -- Default fallback routing to foreign group
+        policy.add(policy.all(foreign_dns_group))
 
-      -- 5. Load china-domain-list for domestic split-tunneling
-      local china_domains = {}
-      local file = io.open("/etc/knot-resolver/china-domain-list.txt", "r")
-      if file then
-        for line in file:lines() do
-          if line ~= "" and not string.match(line, "^%s*#") then
-            table.insert(china_domains, line)
+        -- Load china-domain-list for domestic split-tunneling
+        local china_domains = {}
+        local file = io.open("/etc/knot-resolver/china-domain-list.txt", "r")
+        if file then
+          for line in file:lines() do
+            if line ~= "" and not string.match(line, "^%s*#") then
+              table.insert(china_domains, line)
+            end
           end
+          file:close()
         end
-        file:close()
-      end
 
-      if #china_domains > 0 then
-        policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
-      end
-    '';
+        if #china_domains > 0 then
+          policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
+        end
+      '';
+    };
   };
 
   # ==================== mDNS Repeater ====================
