@@ -92,7 +92,7 @@ in
         enable = true;
         group = "traefik";
         dataDir = "/var/lib/traefik";
-        environmentFile = "/var/lib/traefik/traefik-env";
+        environmentFiles = [ "/var/lib/traefik/traefik-env" ];
 
         staticConfigOptions = {
           global = {
