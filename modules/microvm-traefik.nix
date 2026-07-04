@@ -32,6 +32,11 @@ in
       # but we declare it explicitly below.
       microvm = {
         hypervisor = "qemu";
+
+        # VSOCK backdoor: `microvm -s traefik` from the host sshes in over
+        # AF_VSOCK without needing network/Login access. CID 3 (0/1/2 reserved).
+        vsock.cid = 3;
+        vsock.ssh.enable = true;
         vcpu = 2;
         mem = 512;
         balloon = true;
@@ -159,7 +164,16 @@ in
       };
       users.groups.traefik = {};
 
-      # No SSH; access the VM via the QEMU serial console from the host instead.
+      # microvm.vsock.ssh.enable pulls in services.openssh.enable so sshd
+      # listens on VSOCK::22 (reachable from the host via `microvm -s traefik`).
+      # sshd also binds a network socket on :22, but the firewall below only
+      # opens 80/443, so :22 is unreachable from the LAN/WAN. Allow root login
+      # (no password) so VSOCK ssh and the serial-console getty both work.
+      services.openssh.settings.PermitRootLogin = "yes";
+      services.openssh.settings.PasswordAuthentication = true;
+
+      # Access the VM via `microvm -s traefik` (VSOCK ssh) or the QEMU serial
+      # console from the host; root has an empty password for both.
       users.users.root.password = "";
       services.getty.autologinUser = "root";
 
