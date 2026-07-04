@@ -16,6 +16,10 @@
       url = "./pkgs/mdns-publisher";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    smartdns = {
+      url = "./pkgs/smartdns";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     microvm = {
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";

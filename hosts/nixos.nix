@@ -8,6 +8,7 @@
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
     inputs.mdns-publisher.nixosModules.default
+    inputs.smartdns.nixosModules.default
     ../modules/microvm-traefik.nix
   ];
 
