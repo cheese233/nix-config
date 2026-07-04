@@ -7,7 +7,6 @@
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
-    inputs.mdns-publisher.nixosModules.default
     ../modules/microvm-traefik.nix
   ];
 
@@ -153,8 +152,9 @@
 
         -- Define DNS groups
         local china_dns_group = policy.FORWARD({
-          '223.5.5.5',
-          '223.6.6.6'
+          '119.29.29.29',
+          '180.184.1.1',
+          '180.184.2.2'
         })
 
         local foreign_dns_group = policy.FORWARD({
@@ -189,13 +189,15 @@
   };
 
   # ==================== systemd-resolved ====================
-  # Configured to act as an mDNS client/resolver on local interfaces,
-  # but NOT as a responder/announcer (which is handled by mdns-publisher).
+  # Acts as both mDNS resolver AND responder on local interfaces.
+  # MulticastDNS="yes" makes resolved publish nixos.local and resolve
+  # other *.local names on the LAN, replacing the standalone
+  # mdns-publisher (which conflicted with resolved on UDP 5353).
   services.resolved = {
     enable = true;
     settings = {
       Resolve = {
-        MulticastDNS = "resolve";
+        MulticastDNS = "yes";
         DNS = [ "::1" "127.0.0.1" ];
         Domains = [ "~." ];
       };
@@ -253,20 +255,6 @@
       lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
-  };
-
-  # ==================== mDNS ====================
-  # Local mDNS responder: publishes this host's A/AAAA records as
-  # `nixos.local` on br-lan. Works in tandem with systemd-resolved
-  # (which resolves .local via unicast-forwarded mDNS), allowing native
-  # clients to resolve local names smoothly without needing L2 bridging.
-  #
-  # Module provided by the ./pkgs/mdns-publisher flake (pure Go,
-  # no CGO). openFirewall is off because we use nftables below;
-  # the lan-to-fw-mdns rule opens UDP 5353 on br-lan.
-  services.mdns-publisher = {
-    enable = true;
-    interface = "br-lan";
   };
 
   # ==================== DAE ====================
