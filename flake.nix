@@ -16,10 +16,11 @@
       url = "./pkgs/mdns-publisher";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    smartdns = {
-      url = "./pkgs/smartdns";
+    mdns-repeater = {
+      url = "./pkgs/mdns-repeater";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
     microvm = {
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";

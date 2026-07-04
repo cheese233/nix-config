@@ -1,5 +1,5 @@
 {
-  description = "dnsmasq-china-list converted for SmartDNS";
+  description = "dnsmasq-china-list converted to plain domain list";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixpkgs-unstable";
@@ -21,7 +21,7 @@
         in
         {
           default = pkgs.stdenv.mkDerivation {
-            pname = "smartdns-china-list";
+            pname = "dnsmasq-china-list";
             version = toString (dnsmasq-china-list.lastModified or "unstable");
             src = dnsmasq-china-list;
 
@@ -29,15 +29,15 @@
 
             installPhase = ''
               runHook preInstall
-              mkdir -p $out/etc/smartdns
+              mkdir -p $out/etc
               awk -F'/' '{print $2}' accelerated-domains.china.conf \
                 | sed '/^$/d' \
-                > $out/etc/smartdns/china-domain-list.txt
+                > $out/etc/china-domain-list.txt
               runHook postInstall
             '';
 
             meta = with pkgs.lib; {
-              description = "dnsmasq-china-list converted to SmartDNS nameserver format";
+              description = "dnsmasq-china-list converted to plain domain list format";
               license = licenses.mit;
               maintainers = [ ];
             };

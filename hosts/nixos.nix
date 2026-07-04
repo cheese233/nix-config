@@ -8,7 +8,7 @@
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
     inputs.mdns-publisher.nixosModules.default
-    inputs.smartdns.nixosModules.default
+    inputs.mdns-repeater.nixosModules.default
     ../modules/microvm-traefik.nix
   ];
 
@@ -121,38 +121,74 @@
     '';
   };
 
-  # ==================== DNS ====================
-  environment.etc."smartdns/china-domain-list.txt" = {
-    source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/smartdns/china-domain-list.txt";
+  # ==================== DNS (Knot Resolver) ====================
+  environment.etc."knot-resolver/china-domain-list.txt" = {
+    source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/china-domain-list.txt";
   };
 
-  services.smartdns = {
+  services.knot-resolver = {
     enable = true;
-    bindPort = 53;
-    settings = {
-      bind = "[::]:53";
-      cache-persist = false;
-      server = [
-        "223.5.5.5 -group alidns"
-        "223.6.6.6 -group alidns"
-        "8.8.8.8"
-        "8.8.4.4"
-      ];
-      dns64 = "64:ff9b::/96";
-      prefetch-domain = true;
-      speed-check-mode = "none";
-      dualstack-ip-selection = false;
-      "force-AAAA-SOA" = false;
-      conf-file = "/etc/smartdns/china-rules.conf";
-      mdns-lookup = true;
-    };
+    extraConfig = ''
+      -- Load required modules
+      modules = {
+        'dns64',     -- IPv6-only transition (NAT64) support
+        'policy',    -- Domain policy forwarding
+        'prefetch',  -- Cache prefetching for active records
+        'hints'      -- Static hosts resolution
+      }
+
+      -- 1. Configure DNS64
+      dns64.config({
+        prefix = '64:ff9b::'  -- Same NAT64 prefix as TAYGA
+      })
+
+      -- 2. Define DNS groups
+      local china_dns_group = policy.FORWARD({
+        '223.5.5.5',
+        '223.6.6.6'
+      })
+
+      local foreign_dns_group = policy.FORWARD({
+        '8.8.8.8',
+        '8.8.4.4'
+      })
+
+      -- 3. Default fallback routing to foreign group
+      policy.add(policy.all(foreign_dns_group))
+
+      -- 4. Bind listener to localhost loopback interfaces and LAN IPv6 gateway address
+      net.listen('127.0.0.1', 53)
+      net.listen('::1', 53)
+      net.listen('fdea:d:beef::1', 53)
+
+      -- 5. Load china-domain-list for domestic split-tunneling
+      local china_domains = {}
+      local file = io.open("/etc/knot-resolver/china-domain-list.txt", "r")
+      if file then
+        for line in file:lines() do
+          if line ~= "" and not string.match(line, "^%s*#") then
+            table.insert(china_domains, line)
+          end
+        end
+        file:close()
+      end
+
+      if #china_domains > 0 then
+        policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
+      end
+    '';
   };
 
-  environment.etc."smartdns/china-rules.conf" = {
-    text = ''
-      domain-set -name china-list -type list -file /etc/smartdns/china-domain-list.txt
-      domain-rules /domain-set:china-list/ -nameserver alidns
-    '';
+  # ==================== mDNS Repeater ====================
+  # geekman/mdns-repeater is used to repeat mDNS multicast packets between DIFFERENT
+  # Layer 2 network segments (e.g. br-lan and a separate guest/IoT interface like wlan0).
+  # 
+  # NOTE: Since the vm-traefik MicroVM is directly bridged as a port of br-lan, the Linux kernel
+  # bridge natively forwards mDNS multicast packets between them. Therefore, vm-traefik should NOT
+  # be listed here.
+  services.mdns-repeater = {
+    enable = true;
+    interfaces = [ "br-lan" "wlan0" ]; # Replace wlan0 with your other local interfaces (e.g. IoT VLAN)
   };
 
   # ==================== NAT64 ====================
@@ -210,10 +246,9 @@
 
   # ==================== mDNS ====================
   # Local mDNS responder: publishes this host's A/AAAA records as
-  # `nixos.local` on br-lan. Pairs with smartdns's `mdns-lookup yes`
-  # below so LAN clients can resolve `nixos.local` via the router's
-  # smartdns (mDNS-aware unicast), without each client needing its own
-  # mDNS stack.
+  # `nixos.local` on br-lan. Pairs with mdns-repeater below so mDNS
+  # packets can be repeated across local segments (e.g., LAN and MicroVM tap),
+  # allowing native mDNS clients to resolve `.local` domains smoothly.
   #
   # Module provided by the ./pkgs/mdns-publisher flake (pure Go,
   # no CGO). openFirewall is off because we use nftables below;
@@ -252,11 +287,11 @@
       }
       dns {
         upstream {
-          smartdns: 'udp://127.0.0.1:53'
+          kresd: 'udp://127.0.0.1:53'
         }
         routing {
           request {
-            fallback: smartdns
+            fallback: kresd
           }
         }
       }
@@ -264,7 +299,7 @@
         pname(NetworkManager) -> direct
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
-        pname(smartdns) && dport(53) -> must_direct
+        pname(kresd) && dport(53) -> must_direct
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct

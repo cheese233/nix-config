@@ -11,8 +11,8 @@ in
     inherit pkgs;
 
     config = {
-      # Publish this VM as `traefik.local` on the LAN via mDNS, so the
-      # host's smartdns (mdns-lookup) can resolve it without a static entry.
+      # Publish this VM as `traefik.local` on the LAN via mDNS, so other LAN
+      # clients and the host can resolve it without a static entry.
       imports = [ inputs.mdns-publisher.nixosModules.default ];
 
       networking.usePredictableInterfaceNames = false;
