@@ -15,7 +15,7 @@ in
       system.stateVersion = "26.05";
 
       # Fixed machine-id so host can identify this VM's journals (hex only)
-      microvm.machineId = "70aef1c0000000000000000000000000";
+      microvm.machineId = "70aef1c0-0000-0000-0000-000000000000";
 
       # Minimal base: systemd-networkd is enabled via microvm.optimize by default,
       # but we declare it explicitly below.
