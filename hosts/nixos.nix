@@ -65,8 +65,6 @@
   };
 
   systemd.services."pppd-pppoe" = {
-    after = [ "agenix.service" ];
-    wants = [ "agenix.service" ];
     preStart = "${pkgs.iproute2}/bin/ip link set enp2s0f0 up";
   };
 
@@ -80,7 +78,7 @@
   };
 
   networking.bridges = {
-    "br-lan".interfaces = [ "enp2s0f1" ];
+    "br-lan".interfaces = [ "enp2s0f1" "enp3s0" ];
   };
 
   networking.interfaces."br-lan" = {

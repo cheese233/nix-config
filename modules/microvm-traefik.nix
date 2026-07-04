@@ -160,18 +160,11 @@ in
     };
   };
 
-  # Ensure agenix decrypts secrets before the Traefik VM starts,
-  # so the environmentFile is available via virtiofs.
-  systemd.services."microvm@traefik" = {
-    after = [ "agenix.service" ];
-    wants = [ "agenix.service" ];
-  };
-
   age.secrets.traefik-env = {
     file = ../secrets/traefik-env.age;
     path = "/var/lib/microvms/traefik/traefik-data/traefik-env";
     owner = "root";
-    group = "traefik";
+    group = "root";
     mode = "0640";
   };
 
