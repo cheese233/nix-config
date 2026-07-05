@@ -23,6 +23,22 @@
         "type": "github"
       }
     },
+    "avahi2dns": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./pkgs/avahi2dns",
+        "type": "path"
+      },
+      "original": {
+        "path": "./pkgs/avahi2dns",
+        "type": "path"
+      },
+      "parent": []
+    },
     "crane": {
       "locked": {
         "lastModified": 1781825982,
@@ -341,6 +357,7 @@
     "root": {
       "inputs": {
         "agenix": "agenix",
+        "avahi2dns": "avahi2dns",
         "dae": "dae",
         "dnsmasq-china-list": "dnsmasq-china-list",
         "mdns-publisher": "mdns-publisher",
