@@ -1,5 +1,20 @@
 { config, lib, pkgs, inputs, ... }:
 
+let
+  avahi2dns = pkgs.buildGoModule rec {
+    pname = "avahi2dns";
+    version = "0.2.0";
+
+    src = pkgs.fetchFromGitHub {
+      owner = "LouisBrunner";
+      repo = "avahi2dns";
+      rev = "v${version}";
+      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    };
+
+    vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+  };
+in
 {
   imports = [
     ../hardware/nixos.nix
@@ -162,8 +177,8 @@
           '8.8.4.4'
         })
 
-        -- 1. Stub for .local queries to systemd-resolved (mDNS)
-        local local_dns_stub = policy.STUB({'127.0.0.53'})
+        -- 1. Stub for .local queries to avahi2dns (mDNS)
+        local local_dns_stub = policy.STUB({'127.0.0.1@5354'})
         policy.add(policy.suffix(local_dns_stub, policy.todnames({'local.'})))
 
         -- 2. Load china-domain-list for domestic split-tunneling
@@ -179,6 +194,15 @@
         end
 
         if #china_domains > 0 then
+          -- Add each china domain as a negative trust anchor (RFC 7646) so
+          -- DNSSEC validation is skipped at/below these names. The China
+          -- upstream resolvers (DNSPod 119.29.29.29, 180.184.x) don't support
+          -- DNSSEC, so without this every China-domain query would come back
+          -- bogus. Global / foreign traffic keeps full DNSSEC validation.
+          --
+          -- set_insecure() wipes and rebuilds the NTA store on every call, so
+          -- pass the whole list at once (NOT one call per domain in the loop).
+          trust_anchors.set_insecure(china_domains)
           policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
         end
 
@@ -188,19 +212,37 @@
     };
   };
 
-  # ==================== systemd-resolved ====================
-  # Acts as both mDNS resolver AND responder on local interfaces.
-  # MulticastDNS="yes" makes resolved publish nixos.local and resolve
-  # other *.local names on the LAN, replacing the standalone
-  # mdns-publisher (which conflicted with resolved on UDP 5353).
-  services.resolved = {
+  # ==================== avahi2dns ====================
+  # Acts as mDNS resolver bridge on localhost loopback port 5354, forwarding
+  # unicast DNS queries for `.local` to Avahi via D-Bus. This allows us to
+  # drop systemd-resolved completely while maintaining seamless mDNS resolution.
+  systemd.services.avahi2dns = {
+    description = "Avahi to DNS Bridge";
+    after = [ "network.target" "avahi-daemon.service" ];
+    requires = [ "avahi-daemon.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      ExecStart = "${avahi2dns}/bin/avahi2dns -a 127.0.0.1 -p 5354 -d local";
+      Restart = "always";
+      DynamicUser = true;
+      AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
+      CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+    };
+  };
+
+  services.resolved.enable = false;
+
+  # ==================== Avahi mDNS ====================
+  # Acts as mDNS responder (publishing) on local interfaces.
+  services.avahi = {
     enable = true;
-    settings = {
-      Resolve = {
-        MulticastDNS = "yes";
-        DNS = [ "::1" "127.0.0.1" ];
-        Domains = [ "~." ];
-      };
+    nssmdns4 = true;
+    nssmdns6 = true;
+    publish = {
+      enable = true;
+      addresses = true;
+      domain = true;
+      workstation = true;
     };
   };
 
