@@ -162,12 +162,12 @@
           '8.8.4.4'
         })
 
-        -- 1. Forward .local queries to avahi2dns (mDNS bridge).
-        -- policy.STUB via policy.suffix is shadowed by kresd's built-in
-        -- KR_RULE_SUB_NXDOMAIN rule for `local.` (RFC 6762 sec. 22.1.4),
-        -- matched in kr_rule_local_data_answer() before the policy layer runs.
-        -- rule_forward_add atomically overwrites that rule with a STUB-mode
-        -- forward (is_nods=true -> no DNSSEC validation).
+        -- 1. Forward .local queries to avahi2dns (mDNS bridge). kresd has a
+        -- built-in KR_RULE_SUB_NXDOMAIN rule for `local.` (RFC 6762 sec.
+        -- 22.1.4) that shadows policy.suffix; rule_forward_add overwrites it.
+        -- `local.` is also added to the NTA list in the set_insecure() call
+        -- below so kresd doesn't DS-chase it (avahi2dns can't answer DS,
+        -- causing EDE 12 / SERVFAIL).
         policy.rule_forward_add('local.', { dnssec = false }, {{ '127.0.0.1@5354' }})
 
         -- 2. Load china-domain-list for domestic split-tunneling
@@ -189,8 +189,9 @@
           -- DNSSEC, so without this every China-domain query would come back
           -- bogus. Global / foreign traffic keeps full DNSSEC validation.
           --
-          -- set_insecure() wipes and rebuilds the NTA store on every call, so
-          -- pass the whole list at once (NOT one call per domain in the loop).
+          -- `local.` is prepended to the NTA list so kresd doesn't DS-chase it
+          -- (avahi2dns can't answer DS, causing EDE 12 / SERVFAIL).
+          table.insert(china_domains, 1, 'local.')
           trust_anchors.set_insecure(china_domains)
           policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
         end
