@@ -103,7 +103,7 @@
         ipv6rs
         ia_na
         iaid 1
-        ia_pd 1 br-lan
+        ia_pd 1 br-lan/0
     '';
   };
 
