@@ -35,6 +35,20 @@
       options = [ "fmask=0022" "dmask=0022" ];
     };
 
+  fileSystems."/mnt/HDD" = { 
+    device = "HDD";
+    fsType = "zfs";
+    # the zfsutil option is needed when mounting zfs datasets without "legacy" mountpoints
+    options = [ "zfsutil" ];
+  };
+
+  fileSystems."/mnt/HDD/smb" = {
+    device = "HDD/smb";
+    fsType = "zfs";
+    # the zfsutil option is needed when mounting zfs datasets without "legacy" mountpoints
+    options = [ "zfsutil" ];
+  };
+
   swapDevices = [ { device = "/swap/swapfile"; size = 8192; } ];
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";

@@ -29,6 +29,8 @@
   # ==================== ZFS ====================
   boot.supportedFilesystems = [ "zfs" ];
   services.zfs.autoScrub.enable = true;
+  networking.hostId = "deadbeef";
+  boot.zfs.extraPools = [ "HDD" ];
 
   # ==================== Secrets ====================
   age = {
