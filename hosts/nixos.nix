@@ -26,6 +26,10 @@
   # Host-side VSOCK support for `microvm -s <vm>` (= `ssh vsock/<CID>`).
   # The ssh proxy itself is provided by systemd's 20-systemd-ssh-proxy.conf.
   boot.kernelModules = [ "vhost_vsock" ];
+  # ==================== ZFS ====================
+  boot.supportedFilesystems = [ "zfs" ];
+  services.zfs.autoScrub.enable = true;
+
   # ==================== Secrets ====================
   age = {
     identityPaths = [ "/var/lib/agenix/key.txt" ];
