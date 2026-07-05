@@ -177,9 +177,13 @@ in
           '8.8.4.4'
         })
 
-        -- 1. Stub for .local queries to avahi2dns (mDNS)
-        local local_dns_stub = policy.STUB({'127.0.0.1@5354'})
-        policy.add(policy.suffix(local_dns_stub, policy.todnames({'local.'})))
+        -- 1. Forward .local queries to avahi2dns (mDNS bridge).
+        -- policy.STUB via policy.suffix is shadowed by kresd's built-in
+        -- KR_RULE_SUB_NXDOMAIN rule for `local.` (RFC 6762 sec. 22.1.4),
+        -- matched in kr_rule_local_data_answer() before the policy layer runs.
+        -- rule_forward_add atomically overwrites that rule with a STUB-mode
+        -- forward (is_nods=true -> no DNSSEC validation).
+        policy.rule_forward_add('local.', { dnssec = false }, {{ '127.0.0.1@5354' }})
 
         -- 2. Load china-domain-list for domestic split-tunneling
         local china_domains = {}
