@@ -1,20 +1,4 @@
 { config, lib, pkgs, inputs, ... }:
-
-let
-  avahi2dns = pkgs.buildGoModule rec {
-    pname = "avahi2dns";
-    version = "0.2.0";
-
-    src = pkgs.fetchFromGitHub {
-      owner = "LouisBrunner";
-      repo = "avahi2dns";
-      rev = "v${version}";
-      hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-    };
-
-    vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-  };
-in
 {
   imports = [
     ../hardware/nixos.nix
@@ -22,6 +6,7 @@ in
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
+    inputs.avahi2dns.nixosModules.default
     ../modules/microvm-traefik.nix
   ];
 
@@ -217,21 +202,13 @@ in
   };
 
   # ==================== avahi2dns ====================
-  # Acts as mDNS resolver bridge on localhost loopback port 5354, forwarding
-  # unicast DNS queries for `.local` to Avahi via D-Bus. This allows us to
-  # drop systemd-resolved completely while maintaining seamless mDNS resolution.
-  systemd.services.avahi2dns = {
-    description = "Avahi to DNS Bridge";
-    after = [ "network.target" "avahi-daemon.service" ];
-    requires = [ "avahi-daemon.service" ];
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig = {
-      ExecStart = "${avahi2dns}/bin/avahi2dns -a 127.0.0.1 -p 5354 -d local";
-      Restart = "always";
-      DynamicUser = true;
-      AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
-      CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
-    };
+  # mDNS bridge on 127.0.0.1:5354, consumed by knot-resolver's
+  # policy.rule_forward_add for `.local` (see kresd config above).
+  services.avahi2dns = {
+    enable = true;
+    address = "127.0.0.1";
+    port = 5354;
+    domain = "local";
   };
 
   services.resolved.enable = false;

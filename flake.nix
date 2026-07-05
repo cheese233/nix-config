@@ -16,6 +16,10 @@
       url = "./pkgs/mdns-publisher";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    avahi2dns = {
+      url = "./pkgs/avahi2dns";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     microvm = {
       url = "github:microvm-nix/microvm.nix";
