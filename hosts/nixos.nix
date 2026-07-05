@@ -97,7 +97,7 @@
         ipv6rs
         ia_na
         iaid 1
-        ia_pd 1 br-lan/0
+        ia_pd 1 br-lan
     '';
   };
 
@@ -124,9 +124,21 @@
     source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/china-domain-list.txt";
   };
 
+  systemd.tmpfiles.settings."knot-resolver-cache" = {
+    "/run/knot-resolver/cache".d = {
+      user = "knot-resolver";
+      group = "knot-resolver";
+      mode = "0700";
+    };
+  };
+
   services.knot-resolver = {
     enable = true;
     settings = {
+      cache = {
+        storage = "/run/knot-resolver/cache";
+        size-max = "1G";
+      };
       # 1. Bind listener to localhost loopback interfaces and LAN IPv6 gateway address
       network.listen = [
         {
