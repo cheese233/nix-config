@@ -48,6 +48,10 @@
       file = ../secrets/dae-sub.age;
       path = "/etc/dae/local.sub";
     };
+    secrets.awg-key = {
+      file = ../secrets/awg-key.age;
+      path = "/etc/wireguard/awg-key";
+    };
   };
 
   # ==================== PPPoE ====================
@@ -356,4 +360,36 @@
     RuntimeMaxFiles=3
   '';
   systemd.services.dae.serviceConfig.LogNamespace = "dae";
+
+  services.amneziawg.interfaces.awg0 = {
+    address = [ "fdea:d:beef:7767::1/64" ];
+    listenPort = 47999;
+    privateKeyFile = "/etc/wireguard/awg-key";
+
+    extraOptions = {
+      H1 = 114;
+      H2 = 514;
+      H3 = 1919;
+      H4 = 810;
+      S1 = 15;
+      S2 = 16;
+      S3 = 10;
+      S4 = 0;
+      Jc = 4;
+      Jmin = 10;
+      Jmax = 70;
+
+      # Moonlight:
+      I1 = "<b 0x8fff793082ff00010000ffff00000384000100000000003000000000000000000000138800000002000000024cd7f6aa91a78765>";
+      I2 = "<b 0x8000><r 14>";
+    };
+
+    peers = [
+      {
+        publicKey = "TmOvG7hFvqGvwffqJT3qRmwdA7tGtPEgpovZEuqgqEE=";
+        allowedIPs = [ "fdea:d:beef:7767:0:1::/96" ];
+      }
+    ];
+  };
+
 }
