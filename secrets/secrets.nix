@@ -6,4 +6,5 @@ in
   "ppp-name.age".publicKeys = [ nixos ];
   "dae-sub.age".publicKeys = [ nixos ];
   "traefik-env.age".publicKeys = [ nixos ];
+  "awg-key.age".publicKeys = [ nixos ];
 }
