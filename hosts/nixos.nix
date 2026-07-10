@@ -8,6 +8,7 @@
     inputs.dae.nixosModules.dae
     inputs.avahi2dns.nixosModules.default
     ../modules/microvm-traefik.nix
+    ../modules/amneziawg.nix
   ];
 
   networking.hostName = "nixos";
@@ -200,19 +201,17 @@
           file:close()
         end
 
-        if #china_domains > 0 then
-          -- Add each china domain as a negative trust anchor (RFC 7646) so
-          -- DNSSEC validation is skipped at/below these names. The China
-          -- upstream resolvers (DNSPod 119.29.29.29, 180.184.x) don't support
-          -- DNSSEC, so without this every China-domain query would come back
-          -- bogus. Global / foreign traffic keeps full DNSSEC validation.
-          --
-          -- `local.` is prepended to the NTA list so kresd doesn't DS-chase it
-          -- (avahi2dns can't answer DS, causing EDE 12 / SERVFAIL).
-          table.insert(china_domains, 1, 'local.')
-          trust_anchors.set_insecure(china_domains)
-          policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
-        end
+        -- Add each china domain as a negative trust anchor (RFC 7646) so
+        -- DNSSEC validation is skipped at/below these names. The China
+        -- upstream resolvers (DNSPod 119.29.29.29, 180.184.x) don't support
+        -- DNSSEC, so without this every China-domain query would come back
+        -- bogus. Global / foreign traffic keeps full DNSSEC validation.
+        --
+        -- `local.` is prepended to the NTA list so kresd doesn't DS-chase it
+        -- (avahi2dns can't answer DS, causing EDE 12 / SERVFAIL).
+        table.insert(china_domains, 1, 'local.')
+        trust_anchors.set_insecure(china_domains)
+        policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
 
         -- 3. Default fallback routing to foreign group (MUST BE LAST!)
         policy.add(policy.all(foreign_dns_group))
