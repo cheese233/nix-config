@@ -151,6 +151,9 @@ in
           entryPoints.websecure = {
             address = ":443";
           };
+          entryPoints.dashboard = {
+            address = "[fdea:d:beef::ff:fe77:6562]:8443";
+          };
 
           certificatesResolvers.letsencrypt.acme = {
             email = "postmaster+traefik@c23.me"; # TODO: replace with your email
@@ -158,7 +161,6 @@ in
             tlsChallenge = {};
           };
 
-          # Log to journald by default; access logs can be enabled later.
           log = {
             level = "INFO";
           };
@@ -167,12 +169,12 @@ in
         # Dynamic configuration: add routers/services here as you add backends.
         dynamicConfigOptions = {
           http.routers.dashboard = {
-            rule = "Host(`traefik.local`)";
+            rule = "Host(`traefik.local`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))";
             service = "api@internal";
-            entryPoints = [ "websecure" ];
+            entryPoints = [ "dashboard" ];
             middlewares = [ "lan-only" ];
           };
-          http.middlewares.lan-only.ipAllowList.sourceRange = [ "fdea:d:beef::/64" ];
+          http.middlewares.lan-only.ipAllowList.sourceRange = [ "fdea:d:beef::/48" ];
         };
       };
 
@@ -209,7 +211,7 @@ in
 
       networking.firewall = {
         enable = true;
-        allowedTCPPorts = [ 80 443 ];
+        allowedTCPPorts = [ 80 443 8443 ];
       };
 
     };
