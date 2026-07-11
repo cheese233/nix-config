@@ -20,8 +20,8 @@
       url = "./pkgs/avahi2dns";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    dns-over-https = {
-      url = "./pkgs/dns-over-https";
+    microdoh = {
+      url = "./pkgs/microdoh";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 

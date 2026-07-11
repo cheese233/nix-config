@@ -7,6 +7,7 @@
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
     inputs.avahi2dns.nixosModules.default
+    inputs.microdoh.nixosModules.default
     ../modules/microvm-traefik.nix
     ../modules/amneziawg.nix
   ];
@@ -236,58 +237,35 @@
     domain = "local";
   };
 
-  # ==================== DNS-over-HTTPS client ====================
-  environment.etc."dns-over-https/doh-client.conf".text = ''
-    listen = [
-      "[::1]:5443",
-    ]
+  # ==================== DNS-over-HTTPS client (microdoh) ====================
+  services.microdoh = {
+    enable = true;
+    listen = "[::1]:5443";
+    bootstrapDns = "127.0.0.1";
+    timeoutSecs = 30;
+    tokenFile = null;  # set via ExecStartPre environment
+  };
 
-    [upstream]
-    upstream_selector = "random"
+  systemd.services.microdoh = {
+    after = lib.mkForce [ "network.target" "knot-resolver.service" "agenix.service" ];
+    wants = lib.mkForce [ "knot-resolver.service" ];
 
-    [[upstream.upstream_ietf]]
-      url = "https://__DOH_DOMAIN__/__DOH_PATH__"
-      weight = 100
-      bearer_token = "__DOH_BEARER_TOKEN__"
-
-    [others]
-    bootstrap = [
-      "127.0.0.1:53",
-      "[::1]:53",
-    ]
-    timeout = 30
-    no_user_agent = true
-  '';
-
-  systemd.services.doh-client = {
-    description = "DNS-over-HTTPS Client";
-    after = [ "network.target" "knot-resolver.service" "agenix.service" ];
-    wants = [ "knot-resolver.service" ];
-    wantedBy = [ "multi-user.target" ];
     serviceConfig = {
-      Type = "simple";
-      ExecStart = ''${inputs.dns-over-https.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/doh-client --conf /run/doh-client/doh-client.conf --verbose'';
-      ExecStartPre = [
-        "+${pkgs.writeShellScript "doh-client-pre-start" ''
-          install -d -m 0755 /run/doh-client
-          set -a; . /run/agenix/doh-env; set +a
-          sed \
-            -e "s|__DOH_DOMAIN__|$DOMAIN|g" \
-            -e "s|__DOH_BEARER_TOKEN__|$TOKEN|g" \
-            -e "s|__DOH_PATH__|$URI_PATH|g" \
-            /etc/dns-over-https/doh-client.conf > /run/doh-client/doh-client.conf
-        ''}"
-      ];
-      Restart = "on-failure";
-      RestartSec = "5s";
-      DynamicUser = true;
-      RuntimeDirectory = "doh-client";
-      AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
-      CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
-      NoNewPrivileges = true;
-      PrivateTmp = true;
-      ProtectSystem = "strict";
-      ProtectHome = true;
+      ExecStart = lib.mkForce (
+        let
+          script = pkgs.writeShellScript "microdoh-start" ''
+            set -a; . /run/agenix/doh-env; set +a
+            exec ${config.services.microdoh.package}/bin/microdoh \
+              --listen ${config.services.microdoh.listen} \
+              --upstream "https://$DOMAIN/$URI_PATH" \
+              --bootstrap-dns ${config.services.microdoh.bootstrapDns} \
+              --timeout-secs ${toString config.services.microdoh.timeoutSecs} \
+              --token "$TOKEN"
+          '';
+        in "+${script}"
+      );
+      ExecStartPre = lib.mkForce null;
+      RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
     };
   };
 
@@ -408,7 +386,7 @@
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
         pname(kresd) -> must_rules
-        pname(doh-client) -> must_rules
+        pname(microdoh) -> must_rules
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
