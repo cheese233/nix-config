@@ -258,7 +258,7 @@
             set -a; . /run/agenix/doh-env; set +a
             exec ${config.services.microdoh.package}/bin/microdoh \
               --listen ${config.services.microdoh.listen} \
-              --upstream "https://$DOMAIN/$URI_PATH" \
+              --upstream "https://$DOMAIN$URI_PATH" \
               --bootstrap-dns ${config.services.microdoh.bootstrapDns} \
               --timeout-secs ${toString config.services.microdoh.timeoutSecs} \
               --token "$TOKEN"

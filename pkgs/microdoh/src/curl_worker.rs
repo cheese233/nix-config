@@ -118,13 +118,35 @@ fn worker_loop(
             break;
         }
 
-        // 4. Wait for activity on curl's sockets (or timeout).
-        //    This is the cross-platform equivalent of epoll_wait.
-        let mut wait_fds: Vec<WaitFd> = Vec::new();
-        match multi.wait(&mut wait_fds, Duration::from_millis(100)) {
-            Ok(_n) => {}
-            Err(e) => {
-                log::warn!("multi.wait: {e}");
+        // 4. Wait for the next event.
+        if running == 0 {
+            // No transfers in flight — block until a new DNS query arrives.
+            // blocking_recv() works from non-tokio threads.
+            match rx.blocking_recv() {
+                Some(task) => {
+                    let resolve_state = state.read().unwrap();
+                    let easy = build_easy2_request(
+                        task.query,
+                        upstream,
+                        token.as_deref(),
+                        &resolve_state,
+                        timeout_secs,
+                    );
+                    drop(resolve_state);
+                    add_transfer(&mut multi, &mut pending, &mut next_token, easy, task.resp_tx);
+                }
+                None => {
+                    // Channel closed — finish remaining work.
+                }
+            }
+        } else {
+            // Transfers are in flight — wait for socket activity.
+            let mut wait_fds: Vec<WaitFd> = Vec::new();
+            match multi.wait(&mut wait_fds, Duration::from_millis(100)) {
+                Ok(_n) => {}
+                Err(e) => {
+                    log::warn!("multi.wait: {e}");
+                }
             }
         }
 
