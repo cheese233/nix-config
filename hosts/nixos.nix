@@ -140,10 +140,15 @@
   };
 
 
-  systemd.services.knot-resolver.serviceConfig.RuntimeDirectory = [
-    "knot-resolver"
-    "knot-resolver/cache"
-  ];
+
+  systemd.services.knot-resolver.serviceConfig = {
+    RuntimeDirectory = [
+      "knot-resolver/cache"
+    ];
+    EnvironmentFile = [ "-/run/agenix/doh-env" ];
+  };
+
+  systemd.services.knot-resolver.after = lib.mkAfter [ "agenix.service" ];
 
   services.knot-resolver = {
     enable = true;
@@ -183,7 +188,7 @@
         })
 
         local foreign_dns_group = policy.FORWARD({
-          '[::1]@5443'
+          '::1@5443'
         })
 
         -- 1. Forward .local queries to avahi2dns (mDNS bridge). kresd has a
@@ -204,6 +209,14 @@
             end
           end
           file:close()
+        end
+
+        -- Also add the DoH upstream domain (from agenix env, via EnvironmentFile)
+        -- so its bootstrap resolution goes through DNSPod instead of looping
+        -- back into doh-client at :5443.
+        local doh_domain = os.getenv('DOMAIN')
+        if doh_domain and doh_domain ~= '' then
+          table.insert(china_domains, doh_domain .. '.')
         end
 
         -- Add each china domain as a negative trust anchor (RFC 7646) so
