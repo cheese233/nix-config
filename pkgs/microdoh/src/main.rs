@@ -97,6 +97,7 @@ fn main() -> anyhow::Result<()> {
             upstream_port,
             bootstrap_dns,
             token,
+            cli.timeout_secs,
         );
 
         // ── Run UDP listener on the tokio runtime ──

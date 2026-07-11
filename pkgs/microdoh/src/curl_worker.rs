@@ -16,6 +16,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::doh::{
     build_easy2_request, ensure_fresh, DnsRuntime, DohHandler,
 };
+
+/// Max new tasks to drain per loop iteration to avoid response starvation.
+const MAX_DRAIN_PER_LOOP: usize = 64;
 use crate::error::Result;
 use crate::udp::DnsTask;
 
@@ -31,11 +34,12 @@ pub fn spawn(
     port: u16,
     bootstrap_dns: IpAddr,
     token: Option<Arc<str>>,
+    timeout_secs: u64,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("curl-worker".into())
         .spawn(move || {
-            if let Err(e) = worker_loop(rx, &upstream, &host, port, bootstrap_dns, &token) {
+            if let Err(e) = worker_loop(rx, &upstream, &host, port, bootstrap_dns, &token, timeout_secs) {
                 log::error!("curl worker exiting: {e}");
             }
         })
@@ -63,6 +67,7 @@ fn worker_loop(
     port: u16,
     bootstrap_dns: IpAddr,
     token: &Option<Arc<str>>,
+    timeout_secs: u64,
 ) -> Result<()> {
     // ── Bootstrap DNS runtime ──
     let dns_rt = DnsRuntime::new(bootstrap_dns)?;
@@ -83,17 +88,25 @@ fn worker_loop(
         // 0. Ensure bootstrap DNS is fresh.
         ensure_fresh(&state, &dns_rt, host, port);
 
-        // 1. Drain new tasks from the channel (non-blocking).
-        while let Ok(task) = rx.try_recv() {
-            let resolve_state = state.read().unwrap();
-            let easy = build_easy2_request(
-                task.query,
-                upstream,
-                token.as_deref(),
-                &resolve_state,
-            );
-            drop(resolve_state);
-            add_transfer(&mut multi, &mut pending, &mut next_token, easy, task.resp_tx);
+        // 1. Drain new tasks from the channel (non-blocking, bounded).
+        let mut drained = 0;
+        while drained < MAX_DRAIN_PER_LOOP {
+            match rx.try_recv() {
+                Ok(task) => {
+                    let resolve_state = state.read().unwrap();
+                    let easy = build_easy2_request(
+                        task.query,
+                        upstream,
+                        token.as_deref(),
+                        &resolve_state,
+                        timeout_secs,
+                    );
+                    drop(resolve_state);
+                    add_transfer(&mut multi, &mut pending, &mut next_token, easy, task.resp_tx);
+                    drained += 1;
+                }
+                Err(_) => break,
+            }
         }
 
         // 2. Drive transfers until there's nothing more to do right now.
@@ -178,14 +191,22 @@ fn collect_completed(
     for tok in completed {
         if let Some(mut p) = pending.remove(&tok) {
             let status = p.handle.response_code().unwrap_or(0);
+            let failed = status == 0 || !(200..300).contains(&status);
+
             if status == 0 {
                 log::debug!("transfer {tok}: no HTTP response");
-            } else if !(200..300).contains(&status) {
+            } else if failed {
                 log::warn!("transfer {tok}: HTTP {status}");
             }
 
-            let response = std::mem::take(&mut p.handle.get_mut().response);
-            let _ = p.resp_tx.send(response);
+            if failed {
+                // Drop resp_tx → oneshot returns Canceled → UDP task skips reply.
+                // The client retries, which is correct for a failed upstream query.
+                drop(p.resp_tx);
+            } else {
+                let response = std::mem::take(&mut p.handle.get_mut().response);
+                let _ = p.resp_tx.send(response);
+            }
         }
     }
 }
