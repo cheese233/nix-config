@@ -140,8 +140,10 @@
   };
 
 
-  systemd.services.knot-resolver.serviceConfig.RuntimeDirectory =
-    lib.mkAfter [ "knot-resolver/cache" ];
+  systemd.services.knot-resolver.serviceConfig.RuntimeDirectory = [
+    "knot-resolver"
+    "knot-resolver/cache"
+  ];
 
   services.knot-resolver = {
     enable = true;
