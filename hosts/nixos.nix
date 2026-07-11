@@ -145,7 +145,14 @@
     RuntimeDirectory = [
       "knot-resolver/cache"
     ];
-    EnvironmentFile = [ "-/run/agenix/doh-env" ];
+    ExecStartPre = [
+      "+${pkgs.writeShellScript "knot-resolver-doh-upstream" ''
+        set -a; . /run/agenix/doh-env; set +a
+        cat > /run/knot-resolver/doh-upstream.lua <<- EOF
+          table.insert(china_domains, '$DOMAIN.')
+        EOF
+      ''}"
+    ];
   };
 
   systemd.services.knot-resolver.after = lib.mkAfter [ "agenix.service" ];
@@ -200,7 +207,7 @@
         policy.rule_forward_add('local.', { dnssec = false }, {{ '127.0.0.1@5354' }})
 
         -- 2. Load china-domain-list for domestic split-tunneling
-        local china_domains = {}
+        china_domains = {}
         local file = io.open("/etc/knot-resolver/china-domain-list.txt", "r")
         if file then
           for line in file:lines() do
@@ -211,13 +218,7 @@
           file:close()
         end
 
-        -- Also add the DoH upstream domain (from agenix env, via EnvironmentFile)
-        -- so its bootstrap resolution goes through DNSPod instead of looping
-        -- back into doh-client at :5443.
-        local doh_domain = os.getenv('DOMAIN')
-        if doh_domain and doh_domain ~= "" then
-          table.insert(china_domains, doh_domain .. '.')
-        end
+        dofile('/run/knot-resolver/doh-upstream.lua')
 
         -- Add each china domain as a negative trust anchor (RFC 7646) so
         -- DNSSEC validation is skipped at/below these names. The China
