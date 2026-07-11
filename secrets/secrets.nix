@@ -7,4 +7,5 @@ in
   "dae-sub.age".publicKeys = [ nixos ];
   "traefik-env.age".publicKeys = [ nixos ];
   "awg-key.age".publicKeys = [ nixos ];
+  "doh-env.age".publicKeys = [ nixos ];
 }
