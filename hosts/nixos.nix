@@ -246,7 +246,7 @@
     upstream_selector = "random"
 
     [[upstream.upstream_ietf]]
-      url = "https://__DOH_DOMAIN__/dns-query"
+      url = "https://__DOH_DOMAIN__/__DOH_PATH__"
       weight = 100
       bearer_token = "__DOH_BEARER_TOKEN__"
 
@@ -273,6 +273,7 @@
           sed \
             -e "s|__DOH_DOMAIN__|$DOMAIN|g" \
             -e "s|__DOH_BEARER_TOKEN__|$TOKEN|g" \
+            -e "s|__DOH_PATH__|$URI_PATH|g" \
             /etc/dns-over-https/doh-client.conf > /run/doh-client/doh-client.conf
         ''}"
       ];
