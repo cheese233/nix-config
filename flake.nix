@@ -20,6 +20,10 @@
       url = "./pkgs/avahi2dns";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    dns-over-https = {
+      url = "./pkgs/dns-over-https";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     microvm = {
       url = "github:microvm-nix/microvm.nix";

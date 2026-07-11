@@ -52,6 +52,10 @@
       file = ../secrets/awg-key.age;
       path = "/etc/wireguard/awg-key";
     };
+    secrets.doh-env = {
+      file = ../secrets/doh-env.age;
+      path = "/run/agenix/doh-env";
+    };
   };
 
   # ==================== PPPoE ====================
@@ -181,8 +185,7 @@
         })
 
         local foreign_dns_group = policy.FORWARD({
-          '1.1.1.1',
-          '1.0.0.1'
+          '[::1]@5443'
         })
 
         -- 1. Forward .local queries to avahi2dns (mDNS bridge). kresd has a
@@ -231,6 +234,61 @@
     address = "127.0.0.1";
     port = 5354;
     domain = "local";
+  };
+
+  # ==================== DNS-over-HTTPS client ====================
+  environment.etc."dns-over-https/doh-client.conf".text = ''
+    listen = [
+      "[::1]:5443",
+    ]
+
+    [upstream]
+    upstream_selector = "random"
+
+    [[upstream.upstream_ietf]]
+      url = "https://__DOH_DOMAIN__/dns-query"
+      weight = 100
+      bearer_token = "__DOH_BEARER_TOKEN__"
+
+    [others]
+    bootstrap = [
+      "127.0.0.1:53",
+      "[::1]:53",
+    ]
+    timeout = 30
+  '';
+
+  systemd.services.doh-client = {
+    description = "DNS-over-HTTPS Client";
+    after = [ "network.target" "knot-resolver.service" "agenix.service" ];
+    wants = [ "knot-resolver.service" ];
+    wantedBy = [ "multi-user.target" ];
+    preStart = let
+      cfg = "/etc/dns-over-https/doh-client.conf";
+      envFile = "/run/agenix/doh-env";
+    in ''
+      install -d -m 0755 /run/doh-client
+      # Source the .env file to get DOMAIN and TOKEN
+      set -a; . ${envFile}; set +a
+      sed \
+        -e "s|__DOH_DOMAIN__|$DOMAIN|g" \
+        -e "s|__DOH_BEARER_TOKEN__|$TOKEN|g" \
+        ${cfg} > /run/doh-client/doh-client.conf
+    '';
+    serviceConfig = {
+      Type = "simple";
+      ExecStart = ''${inputs.dns-over-https.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/doh-client --conf /run/doh-client/doh-client.conf'';
+      Restart = "on-failure";
+      RestartSec = "5s";
+      DynamicUser = true;
+      RuntimeDirectory = "doh-client";
+      AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
+      CapabilityBoundingSet = [ "CAP_NET_BIND_SERVICE" ];
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+    };
   };
 
   services.resolved.enable = false;
@@ -289,6 +347,7 @@
       wan = { interfaces = [ "ppp0" ]; };
       lan = { interfaces = [ "br-lan" ]; };
       nat64 = { interfaces = [ "nat64" ]; };
+      awg = { interfaces = [ "awg0" ]; };
     };
     rules = {
       lan-to-wan = { from = [ "lan" ]; to = [ "wan" ]; verdict = "accept"; };
@@ -298,6 +357,11 @@
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       lan-to-fw-mdns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 5353 ]; };
       lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
+      lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };
+      lan-to-awg = { from = [ "lan" ]; to = [ "awg" ]; verdict = "accept"; };
+      awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };
+      awg-to-fw-dns = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 5443 ]; allowedTCPPorts = [ 53 5443 ]; };
+      awg-to-fw-icmpv6 = { from = [ "awg" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from AWG\"" ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
   };
