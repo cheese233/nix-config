@@ -256,6 +256,7 @@
       "[::1]:53",
     ]
     timeout = 30
+    no_user_agent = true
   '';
 
   systemd.services.doh-client = {
@@ -265,7 +266,7 @@
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
       Type = "simple";
-      ExecStart = ''${inputs.dns-over-https.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/doh-client --conf /run/doh-client/doh-client.conf'';
+      ExecStart = ''${inputs.dns-over-https.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/doh-client --conf /run/doh-client/doh-client.conf --verbose'';
       ExecStartPre = [
         "+${pkgs.writeShellScript "doh-client-pre-start" ''
           install -d -m 0755 /run/doh-client
