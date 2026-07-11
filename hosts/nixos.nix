@@ -215,7 +215,7 @@
         -- so its bootstrap resolution goes through DNSPod instead of looping
         -- back into doh-client at :5443.
         local doh_domain = os.getenv('DOMAIN')
-        if doh_domain and doh_domain ~= '' then
+        if doh_domain and doh_domain ~= "" then
           table.insert(china_domains, doh_domain .. '.')
         end
 
