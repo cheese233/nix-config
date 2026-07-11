@@ -406,9 +406,11 @@
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
         pname(kresd) -> must_rules
+        pname(doh-client) -> must_rules
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
+        domain(suffix: cloudflare.com) -> direct
 
         fallback: proxy
       }
