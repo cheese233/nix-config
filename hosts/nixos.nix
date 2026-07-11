@@ -188,7 +188,7 @@
         }
 
         -- Define DNS groups
-        local china_dns_group = policy.FORWARD({
+        local china_dns_group = policy.STUB({
           '119.29.29.29',
           '180.184.1.1',
           '180.184.2.2'
@@ -201,10 +201,8 @@
         -- 1. Forward .local queries to avahi2dns (mDNS bridge). kresd has a
         -- built-in KR_RULE_SUB_NXDOMAIN rule for `local.` (RFC 6762 sec.
         -- 22.1.4) that shadows policy.suffix; rule_forward_add overwrites it.
-        -- `local.` is also added to the NTA list in the set_insecure() call
-        -- below so kresd doesn't DS-chase it (avahi2dns can't answer DS,
-        -- causing EDE 12 / SERVFAIL).
         policy.rule_forward_add('local.', { dnssec = false }, {{ '127.0.0.1@5354' }})
+        trust_anchors.set_insecure({ 'local.' })
 
         -- 2. Load china-domain-list for domestic split-tunneling
         china_domains = {}
@@ -220,16 +218,6 @@
 
         dofile('/run/knot-resolver/doh-upstream.lua')
 
-        -- Add each china domain as a negative trust anchor (RFC 7646) so
-        -- DNSSEC validation is skipped at/below these names. The China
-        -- upstream resolvers (DNSPod 119.29.29.29, 180.184.x) don't support
-        -- DNSSEC, so without this every China-domain query would come back
-        -- bogus. Global / foreign traffic keeps full DNSSEC validation.
-        --
-        -- `local.` is prepended to the NTA list so kresd doesn't DS-chase it
-        -- (avahi2dns can't answer DS, causing EDE 12 / SERVFAIL).
-        table.insert(china_domains, 1, 'local.')
-        trust_anchors.set_insecure(china_domains)
         policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
 
         -- 3. Default fallback routing to foreign group (MUST BE LAST!)
