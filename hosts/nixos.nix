@@ -241,9 +241,10 @@
   services.microdoh = {
     enable = true;
     listen = "[::1]:5443";
+    upstream = "https://unset";  # overridden by ExecStart script
     bootstrapDns = "127.0.0.1";
     timeoutSecs = 30;
-    tokenFile = null;  # set via ExecStartPre environment
+    tokenFile = null;
   };
 
   systemd.services.microdoh = {

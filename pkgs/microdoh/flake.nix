@@ -45,6 +45,7 @@
 
             upstream = lib.mkOption {
               type = lib.types.str;
+              default = "https://dns.google/dns-query";
               example = "https://dns.nextdns.io/abc123";
               description = "DoH upstream URL (RFC 8484).";
             };
