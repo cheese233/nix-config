@@ -139,13 +139,9 @@
     source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/china-domain-list.txt";
   };
 
-  systemd.tmpfiles.settings."knot-resolver-cache" = {
-    "/run/knot-resolver/cache".d = {
-      user = "knot-resolver";
-      group = "knot-resolver";
-      mode = "0700";
-    };
-  };
+
+  systemd.services.knot-resolver.serviceConfig.RuntimeDirectory =
+    lib.mkAfter [ "knot-resolver/cache" ];
 
   services.knot-resolver = {
     enable = true;
@@ -263,21 +259,19 @@
     after = [ "network.target" "knot-resolver.service" "agenix.service" ];
     wants = [ "knot-resolver.service" ];
     wantedBy = [ "multi-user.target" ];
-    preStart = let
-      cfg = "/etc/dns-over-https/doh-client.conf";
-      envFile = "/run/agenix/doh-env";
-    in ''
-      install -d -m 0755 /run/doh-client
-      # Source the .env file to get DOMAIN and TOKEN
-      set -a; . ${envFile}; set +a
-      sed \
-        -e "s|__DOH_DOMAIN__|$DOMAIN|g" \
-        -e "s|__DOH_BEARER_TOKEN__|$TOKEN|g" \
-        ${cfg} > /run/doh-client/doh-client.conf
-    '';
     serviceConfig = {
       Type = "simple";
       ExecStart = ''${inputs.dns-over-https.packages.${pkgs.stdenv.hostPlatform.system}.default}/bin/doh-client --conf /run/doh-client/doh-client.conf'';
+      ExecStartPre = [
+        "+${pkgs.writeShellScript "doh-client-pre-start" ''
+          install -d -m 0755 /run/doh-client
+          set -a; . /run/agenix/doh-env; set +a
+          sed \
+            -e "s|__DOH_DOMAIN__|$DOMAIN|g" \
+            -e "s|__DOH_BEARER_TOKEN__|$TOKEN|g" \
+            /etc/dns-over-https/doh-client.conf > /run/doh-client/doh-client.conf
+        ''}"
+      ];
       Restart = "on-failure";
       RestartSec = "5s";
       DynamicUser = true;
