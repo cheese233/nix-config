@@ -1,0 +1,19 @@
+[package]
+name = "microdoh"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+curl = "0.4"
+curl-sys = "0.4"
+tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "macros", "time"] }
+hickory-resolver = { version = "0.25", default-features = false, features = ["system-config", "tokio"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
+url = "2"
+
+
