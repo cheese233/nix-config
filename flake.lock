@@ -95,6 +95,22 @@
         "type": "github"
       }
     },
+    "dibbler": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./pkgs/dibbler",
+        "type": "path"
+      },
+      "original": {
+        "path": "./pkgs/dibbler",
+        "type": "path"
+      },
+      "parent": []
+    },
     "dnsmasq-china-list": {
       "inputs": {
         "dnsmasq-china-list": "dnsmasq-china-list_2",
@@ -375,6 +391,7 @@
         "agenix": "agenix",
         "avahi2dns": "avahi2dns",
         "dae": "dae",
+        "dibbler": "dibbler",
         "dnsmasq-china-list": "dnsmasq-china-list",
         "mdns-publisher": "mdns-publisher",
         "microdoh": "microdoh",
