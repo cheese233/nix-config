@@ -95,22 +95,6 @@
         "type": "github"
       }
     },
-    "dns-over-https": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "path": "./pkgs/dns-over-https",
-        "type": "path"
-      },
-      "original": {
-        "path": "./pkgs/dns-over-https",
-        "type": "path"
-      },
-      "parent": []
-    },
     "dnsmasq-china-list": {
       "inputs": {
         "dnsmasq-china-list": "dnsmasq-china-list_2",
@@ -263,6 +247,22 @@
       },
       "parent": []
     },
+    "microdoh": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./pkgs/microdoh",
+        "type": "path"
+      },
+      "original": {
+        "path": "./pkgs/microdoh",
+        "type": "path"
+      },
+      "parent": []
+    },
     "microvm": {
       "inputs": {
         "nixpkgs": [
@@ -375,9 +375,9 @@
         "agenix": "agenix",
         "avahi2dns": "avahi2dns",
         "dae": "dae",
-        "dns-over-https": "dns-over-https",
         "dnsmasq-china-list": "dnsmasq-china-list",
         "mdns-publisher": "mdns-publisher",
+        "microdoh": "microdoh",
         "microvm": "microvm",
         "nixpkgs": "nixpkgs_2",
         "nnf": "nnf",

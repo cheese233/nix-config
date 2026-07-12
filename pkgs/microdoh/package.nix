@@ -12,7 +12,7 @@ rustPlatform.buildRustPackage {
 
   src = lib.cleanSource ./.;
 
-  cargoHash = lib.fakeHash; # FIXME: fill after first build
+  cargoHash = "sha256-VE64x2t+lxSsKh057t/TEYF2fBYWSkRgIUAYGYuEE5A=";
 
   nativeBuildInputs = [ pkg-config ];
   buildInputs = [
