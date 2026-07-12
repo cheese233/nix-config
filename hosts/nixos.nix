@@ -195,12 +195,9 @@
           '180.184.2.2'
         })
 
-        -- microdoh uses DoH GET (RFC 8484 §4.1) which zeroes the DNS ID
-        -- and base64url-encodes the query, breaking 0x20 randomization.
-        -- Use NO_0X20 flag to disable the case-sensitivity check.
-        local foreign_dns_group = policy.FLAGS({'NO_0X20'}, policy.FORWARD({
+        local foreign_dns_group = policy.FORWARD({
           '::1@5443'
-        }))
+        })
 
         -- 1. Forward .local queries to avahi2dns (mDNS bridge). kresd has a
         -- built-in KR_RULE_SUB_NXDOMAIN rule for `local.` (RFC 6762 sec.
@@ -225,6 +222,9 @@
         policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
 
         -- 3. Default fallback routing to foreign group (MUST BE LAST!)
+        -- microdoh uses DoH GET (RFC 8484 §4.1) which base64url-encodes the
+        -- query, breaking 0x20 case-randomization.  Disable the check.
+        policy.add(policy.all(policy.FLAGS({'NO_0X20'})))
         policy.add(policy.all(foreign_dns_group))
       '';
     };
