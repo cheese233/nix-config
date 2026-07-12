@@ -323,7 +323,7 @@
       lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };
       lan-to-awg = { from = [ "lan" ]; to = [ "awg" ]; verdict = "accept"; };
       awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };
-      awg-to-fw-dns = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 5443 ]; allowedTCPPorts = [ 53 5443 ]; };
+      awg-to-fw-dns = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       awg-to-fw-icmpv6 = { from = [ "awg" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from AWG\"" ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
@@ -376,6 +376,7 @@
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
         domain(suffix: cloudflare.com) -> direct
+        domain(suffix: outlook.com) -> direct
 
         fallback: proxy
       }
