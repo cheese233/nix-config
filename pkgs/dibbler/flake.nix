@@ -22,8 +22,8 @@
             src = pkgs.fetchFromGitHub {
               owner = "tomaszmrugalski";
               repo = "dibbler";
-              rev = "bb6e00b99361674ea6e4d4e6d19eff08f0e2f5d4";
-              hash = ""; # FIXME:
+              rev = "bb6e00b99361ae60d354061f7ca33fd93603863d";
+              hash = "sha256-9I7sq5CA+bjKNsq2FBxemTeRLCzPM+OQWprF6j8MMXw=";
             };
 
             # We use the pre-generated configure script (no autoreconf).
@@ -178,14 +178,13 @@
                 wants = [ "network.target" ];
                 wantedBy = [ "multi-user.target" ];
 
-                preStart = ''
-                  mkdir -p ${cfg.workDir} ${cfg.logDir}
-                '';
-
                 serviceConfig = {
                   Type = "simple";
                   ExecStart = "${pkg}/bin/dibbler-server run";
-                  WorkingDirectory = cfg.workDir;
+                  WorkingDirectory = "/var/lib/dibbler";
+
+                  StateDirectory = "dibbler";
+                  LogsDirectory = "dibbler";
 
                   Restart = "on-failure";
                   RestartSec = "5s";
@@ -207,11 +206,6 @@
                   PrivateTmp = true;
                   ProtectSystem = "strict";
                   ProtectHome = true;
-
-                  ReadWritePaths = [
-                    cfg.workDir
-                    cfg.logDir
-                  ];
 
                   BindReadOnlyPaths = [
                     "${serverConf}:/etc/dibbler/server.conf"
@@ -300,14 +294,13 @@
                 wants = [ "network.target" ];
                 wantedBy = [ "multi-user.target" ];
 
-                preStart = ''
-                  mkdir -p ${cfg.workDir} ${cfg.logDir}
-                '';
-
                 serviceConfig = {
                   Type = "simple";
                   ExecStart = "${pkg}/bin/dibbler-client run";
-                  WorkingDirectory = cfg.workDir;
+                  WorkingDirectory = "/var/lib/dibbler";
+
+                  StateDirectory = "dibbler";
+                  LogsDirectory = "dibbler";
 
                   Restart = "on-failure";
                   RestartSec = "5s";
@@ -327,11 +320,6 @@
                   PrivateTmp = true;
                   ProtectSystem = "strict";
                   ProtectHome = true;
-
-                  ReadWritePaths = [
-                    cfg.workDir
-                    cfg.logDir
-                  ];
 
                   BindReadOnlyPaths = [
                     "${clientConf}:/etc/dibbler/client.conf"
@@ -419,14 +407,13 @@
                 wants = [ "network.target" ];
                 wantedBy = [ "multi-user.target" ];
 
-                preStart = ''
-                  mkdir -p ${cfg.workDir} ${cfg.logDir}
-                '';
-
                 serviceConfig = {
                   Type = "simple";
                   ExecStart = "${pkg}/bin/dibbler-relay run";
-                  WorkingDirectory = cfg.workDir;
+                  WorkingDirectory = "/var/lib/dibbler";
+
+                  StateDirectory = "dibbler";
+                  LogsDirectory = "dibbler";
 
                   Restart = "on-failure";
                   RestartSec = "5s";
@@ -446,11 +433,6 @@
                   PrivateTmp = true;
                   ProtectSystem = "strict";
                   ProtectHome = true;
-
-                  ReadWritePaths = [
-                    cfg.workDir
-                    cfg.logDir
-                  ];
 
                   BindReadOnlyPaths = [
                     "${relayConf}:/etc/dibbler/relay.conf"
