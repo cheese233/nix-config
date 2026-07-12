@@ -11,6 +11,10 @@ use crate::proto;
 pub struct DnsTask {
     /// Raw DNS wire-format query.
     pub query: Vec<u8>,
+    /// Original DNS message ID (bytes 0-1) — must be restored in the response.
+    /// RFC 8484 §4.1 requires ID=0 for GET, but the proxy must preserve the
+    /// client's original ID.
+    pub original_id: [u8; 2],
     /// Peer that sent the query (for the reply).
     #[allow(dead_code)]
     pub peer: SocketAddr,
@@ -40,9 +44,13 @@ pub async fn udp_loop(addr: &str, tx: mpsc::UnboundedSender<DnsTask>) -> anyhow:
             continue;
         }
 
+        // Save the original DNS ID before it gets zeroed for GET requests.
+        let original_id = [buf[0], buf[1]];
+
         let (resp_tx, resp_rx) = oneshot::channel();
         let task = DnsTask {
             query: buf[..n].to_vec(),
+            original_id,
             peer,
             resp_tx,
         };
@@ -56,7 +64,12 @@ pub async fn udp_loop(addr: &str, tx: mpsc::UnboundedSender<DnsTask>) -> anyhow:
         let sock = sock.clone();
         tokio::spawn(async move {
             match resp_rx.await {
-                Ok(resp) => {
+                Ok(mut resp) => {
+                    // Restore the original DNS ID in the response.
+                    if resp.len() >= 2 {
+                        resp[0] = original_id[0];
+                        resp[1] = original_id[1];
+                    }
                     if let Err(e) = sock.send_to(&resp, peer).await {
                         log::warn!("send_to {peer}: {e}");
                     }

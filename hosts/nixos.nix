@@ -261,7 +261,8 @@
               --upstream "https://$DOMAIN$URI_PATH" \
               --bootstrap-dns ${config.services.microdoh.bootstrapDns} \
               --timeout-secs ${toString config.services.microdoh.timeoutSecs} \
-              --token "$TOKEN"
+              --token "$TOKEN" \
+              --verbose
           '';
         in "+${script}"
       );
