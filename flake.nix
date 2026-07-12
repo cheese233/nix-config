@@ -24,6 +24,10 @@
       url = "./pkgs/microdoh";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    dibbler = {
+      url = "./pkgs/dibbler";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     microvm = {
       url = "github:microvm-nix/microvm.nix";

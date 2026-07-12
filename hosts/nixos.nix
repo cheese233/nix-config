@@ -8,6 +8,7 @@
     inputs.dae.nixosModules.dae
     inputs.avahi2dns.nixosModules.default
     inputs.microdoh.nixosModules.default
+    inputs.dibbler.nixosModules.default
     ../modules/microvm-traefik.nix
     ../modules/amneziawg.nix
   ];
@@ -134,6 +135,25 @@
         RDNSS fdea:d:beef::1 {
         };
       };
+    '';
+  };
+
+  # ==================== DHCPv6 (Dibbler, stateless) ====================
+  # Stateless DHCPv6: clients use SLAAC for addresses (via radvd above);
+  # this server announces DNS, domain search, and NAT64 prefix (PREF64).
+  services.dibbler-server = {
+    enable = true;
+    config = ''
+      log-level 7
+      log-mode short
+      stateless
+
+      iface br-lan {
+        option dns-server fdea:d:beef::1
+        option domain local
+        option lifetime 3600
+        option 113 duid 80:00:00:00:00:00:00:00:00
+      }
     '';
   };
 
@@ -319,12 +339,14 @@
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       lan-to-fw-mdns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 5353 ]; };
+      lan-to-fw-dhcpv6 = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };
       lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
       lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };
       lan-to-awg = { from = [ "lan" ]; to = [ "awg" ]; verdict = "accept"; };
       awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };
       awg-to-fw-dns = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       awg-to-fw-icmpv6 = { from = [ "awg" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from AWG\"" ]; };
+      awg-to-fw-dhcpv6 = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
   };
@@ -383,7 +405,7 @@
         domain(full: dash.cloudflare.com) -> resident
         domain(suffix: google.com) -> resident
         domain(geosite: facebook) -> resident
-        domain(geosite: openai, geosite: anthropic, geosite: xai) -> resident
+        domain(geosite: openai, geosite: anthropic, geosite: xai, geosite: google-gemini) -> resident
 
         fallback: proxy
       }
