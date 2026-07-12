@@ -154,6 +154,10 @@ in
           entryPoints.dashboard = {
             address = "[fdea:d:beef::ff:fe77:6562]:8443";
           };
+          # UDP entry point for AmneziaWG
+          entryPoints.awg-udp = {
+            address = ":47999/udp";
+          };
 
           certificatesResolvers.letsencrypt.acme = {
             email = "postmaster+traefik@c23.me"; # TODO: replace with your email
@@ -175,6 +179,19 @@ in
             middlewares = [ "lan-only" ];
           };
           http.middlewares.lan-only.ipAllowList.sourceRange = [ "fdea:d:beef::/48" ];
+          udp.routers.awg = {
+            entryPoints = [ "awg-udp" ];
+            service = "awg-backend";
+          };
+          udp.services.awg-backend = {
+            loadBalancer = {
+              servers = [
+                {
+                  address = "[fdea:d:beef::1]:47999";
+                }
+              ];
+            };
+          };
         };
       };
 
@@ -212,6 +229,7 @@ in
       networking.firewall = {
         enable = true;
         allowedTCPPorts = [ 80 443 8443 ];
+        allowedUDPPorts = [ 47999 ];
       };
 
     };
@@ -251,6 +269,12 @@ in
       from = [ "wan" ];
       to = [ "traefik" ];
       verdict = "accept";
+    };
+    # Allow Traefik to forward UDP traffic to host's AmneziaWG
+    rules.traefik-to-fw-awg = {
+      from = [ "traefik" ];
+      to = [ "fw" ];
+      allowedUDPPorts = [ 47999 ];
     };
     # Allow LAN clients to query the Traefik VM's mDNS responder.
     rules.lan-to-traefik-mdns = {

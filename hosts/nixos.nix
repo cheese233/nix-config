@@ -125,6 +125,8 @@
     config = ''
       interface br-lan {
         AdvSendAdvert on;
+        AdvManagedFlag off;
+        AdvOtherConfigFlag on;
         MinRtrAdvInterval 30;
         MaxRtrAdvInterval 100;
         prefix ::/64 {
