@@ -177,6 +177,7 @@
 
   services.unbound = {
     enable = true;
+    enableRootTrustAnchor = false;
     settings = {
       server = {
         # 1. Bind to localhost and LAN IPv6 gateway address
@@ -187,7 +188,7 @@
           "fdea:d:beef::/64 allow"
         ];
         # 2. DNS64 — synthesize AAAA from A records using NAT64 prefix
-        module-config = ''"dns64 validator iterator"'';
+        module-config = ''"dns64 iterator"'';
         dns64-prefix = "64:ff9b::/96";
         # 3. Caching
         key-cache-size = "256m";
@@ -195,8 +196,6 @@
         rrset-cache-size = "256m";
         prefetch = true;
         prefetch-key = true;
-        # 4. Disable DNSSEC for .local (mDNS bridge — avahi2dns)
-        domain-insecure = "local.";
       };
       # Include runtime-generated china-domain forward zones.
       # WARNING: this disables build-time checkconf (module handles this),
