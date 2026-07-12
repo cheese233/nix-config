@@ -135,104 +135,91 @@
     '';
   };
 
-  # ==================== DNS (Knot Resolver) ====================
-  environment.etc."knot-resolver/china-domain-list.txt" = {
+  # ==================== DNS (Unbound) ====================
+  # Static china domain list from dnsmasq-china-list package (consumed at runtime
+  # by unbound-china-domains.service to generate forward-zone config).
+  environment.etc."unbound/china-domain-list.txt" = {
     source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/china-domain-list.txt";
   };
 
-
-
-  systemd.services.knot-resolver.serviceConfig = {
-    RuntimeDirectory = [
-      "knot-resolver/cache"
-    ];
-    ExecStartPre = [
-      "+${pkgs.writeShellScript "knot-resolver-doh-upstream" ''
-        set -a; . /run/agenix/doh-env; set +a
-        cat > /run/knot-resolver/doh-upstream.lua <<- EOF
-          table.insert(china_domains, '$DOMAIN.')
-        EOF
-      ''}"
-    ];
+  # Generate /run/unbound/china-domains.conf before unbound starts.
+  # Reads the static domain list + the DOH upstream domain from agenix secret
+  # and writes one forward-zone block per domain, targeting Chinese DNS servers.
+  systemd.services.unbound-china-domains = {
+    description = "Generate unbound china-domain forward zones";
+    before = [ "unbound.service" ];
+    requiredBy = [ "unbound.service" ];
+    after = [ "agenix.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RuntimeDirectory = "unbound";
+    };
+    script = ''
+      set -a; . /run/agenix/doh-env; set +a
+      emit_zone() {
+        echo "forward-zone:"
+        echo "    name: \"$1.\""
+        echo "    forward-addr: 119.29.29.29"
+        echo "    forward-addr: 180.184.1.1"
+        echo "    forward-addr: 180.184.2.2"
+      }
+      {
+        while IFS= read -r domain; do
+          [[ -z "$domain" || "$domain" == \#* ]] && continue
+          emit_zone "$domain"
+        done < /etc/unbound/china-domain-list.txt
+        # DOH upstream domain from agenix secret — also via China DNS to avoid
+        # bootstrap deadlock (microdoh needs to resolve it before it's up).
+        emit_zone "$DOMAIN"
+      } > /run/unbound/china-domains.conf
+    '';
   };
 
-  systemd.services.knot-resolver.after = lib.mkAfter [ "agenix.service" ];
-
-  services.knot-resolver = {
+  services.unbound = {
     enable = true;
     settings = {
-      cache = {
-        storage = "/run/knot-resolver/cache";
-        size-max = "1G";
+      server = {
+        # 1. Bind to localhost and LAN IPv6 gateway address
+        interface = [ "127.0.0.1" "::1" "fdea:d:beef::1" ];
+        access-control = [
+          "127.0.0.0/8 allow"
+          "::1/128 allow"
+          "fdea:d:beef::/64 allow"
+        ];
+        # 2. DNS64 — synthesize AAAA from A records using NAT64 prefix
+        module-config = ''"dns64 validator iterator"'';
+        dns64-prefix = "64:ff9b::/96";
+        # 3. Caching
+        key-cache-size = "256m";
+        msg-cache-size = "512m";
+        rrset-cache-size = "256m";
+        prefetch = true;
+        prefetch-key = true;
+        # 4. Disable DNSSEC for .local (mDNS bridge — avahi2dns)
+        domain-insecure = "local.";
       };
-      # 1. Bind listener to localhost loopback interfaces and LAN IPv6 gateway address
-      network.listen = [
-        {
-          interface = [ "127.0.0.1" "::1" "fdea:d:beef::1" ];
-          kind = "dns";
-        }
-      ];
-
-      # 2. Configure DNS64
-      dns64 = {
-        enable = true;
-        prefix = "64:ff9b::/96";
-      };
-
-      # 3. Custom Lua script for advanced policy routing & domestic split-tunneling
-      lua.script = ''
-        -- Load required modules
-        modules = {
-          'policy',
-          'prefetch',
-          'hints'
-        }
-
-        -- Define DNS groups
-        local china_dns_group = policy.STUB({
-          '119.29.29.29',
-          '180.184.1.1',
-          '180.184.2.2'
-        })
-
-        local foreign_dns_group = policy.FORWARD({
-          '::1@5443'
-        })
-
-        -- 1. Forward .local queries to avahi2dns (mDNS bridge). kresd has a
-        -- built-in KR_RULE_SUB_NXDOMAIN rule for `local.` (RFC 6762 sec.
-        -- 22.1.4) that shadows policy.suffix; rule_forward_add overwrites it.
-        policy.rule_forward_add('local.', { dnssec = false }, {{ '127.0.0.1@5354' }})
-        trust_anchors.set_insecure({ 'local.' })
-
-        -- 2. Load china-domain-list for domestic split-tunneling
-        china_domains = {}
-        local file = io.open("/etc/knot-resolver/china-domain-list.txt", "r")
-        if file then
-          for line in file:lines() do
-            if line ~= "" and not string.match(line, "^%s*#") then
-              table.insert(china_domains, line)
-            end
-          end
-          file:close()
-        end
-
-        dofile('/run/knot-resolver/doh-upstream.lua')
-
-        policy.add(policy.suffix(china_dns_group, policy.todnames(china_domains)))
-
-        -- 3. Default fallback routing to foreign group (MUST BE LAST!)
-        -- microdoh uses DoH GET (RFC 8484 §4.1) which base64url-encodes the
-        -- query, breaking 0x20 case-randomization.  Disable the check.
-        policy.add(policy.all(policy.FLAGS({'NO_0X20'})))
-        policy.add(policy.all(foreign_dns_group))
-      '';
+      # Include runtime-generated china-domain forward zones.
+      # WARNING: this disables build-time checkconf (module handles this),
+      # so the generated file MUST be valid unbound.conf syntax.
+      include = "/run/unbound/china-domains.conf";
+      # .local → avahi2dns mDNS bridge (127.0.0.1:5354)
+      stub-zone = [{
+        name = "local.";
+        stub-addr = "127.0.0.1@5354";
+      }];
+      # Default fallback → microdoh (DoH client on [::1]:5443).
+      # Individual china-domain forward-zone entries (included above) are more
+      # specific and take priority over this catch-all.
+      forward-zone = [{
+        name = ".";
+        forward-addr = "::1@5443";
+      }];
     };
   };
 
   # ==================== avahi2dns ====================
-  # mDNS bridge on 127.0.0.1:5354, consumed by knot-resolver's
-  # policy.rule_forward_add for `.local` (see kresd config above).
+  # mDNS bridge on 127.0.0.1:5354, consumed by unbound's
+  # stub-zone for `.local` (see unbound config above).
   services.avahi2dns = {
     enable = true;
     address = "127.0.0.1";
@@ -252,8 +239,8 @@
   };
 
   systemd.services.microdoh = {
-    after = lib.mkForce [ "network.target" "knot-resolver.service" "agenix.service" ];
-    wants = lib.mkForce [ "knot-resolver.service" ];
+    after = lib.mkForce [ "network.target" "unbound.service" "agenix.service" ];
+    wants = lib.mkForce [ "unbound.service" ];
 
     serviceConfig = {
       ExecStart = lib.mkForce (
@@ -378,11 +365,11 @@
       }
       dns {
         upstream {
-          kresd: 'udp://127.0.0.1:53'
+          unbound: 'udp://127.0.0.1:53'
         }
         routing {
           request {
-            fallback: kresd
+            fallback: unbound
           }
         }
       }
@@ -390,7 +377,7 @@
         pname(NetworkManager) -> direct
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
-        pname(kresd) -> must_rules
+        pname(unbound) -> must_rules
         pname(microdoh) -> must_rules
 
         dip(geoip:cn) -> direct
