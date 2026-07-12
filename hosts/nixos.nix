@@ -355,6 +355,10 @@
         proxy {
           policy: fixed(0)
         }
+
+        resident {
+          policy: fixed(1)
+        }
       }
       dns {
         upstream {
@@ -375,8 +379,11 @@
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
-        domain(suffix: cloudflare.com) -> direct
-        domain(suffix: outlook.com) -> direct
+
+        domain(full: dash.cloudflare.com) -> resident
+        domain(suffix: google.com) -> resident
+        domain(geosite: facebook) -> resident
+        domain(geosite: openai, geosite: anthropic, geosite: xai) -> resident
 
         fallback: proxy
       }
