@@ -142,7 +142,7 @@
     source = "${inputs.dnsmasq-china-list.packages.${pkgs.stdenv.hostPlatform.system}.default}/etc/china-domain-list.txt";
   };
 
-  # Generate /run/unbound/china-domains.conf before unbound starts.
+  # Generate /var/lib/unbound/china-domains.conf before unbound starts.
   # Reads the static domain list + the DOH upstream domain from agenix secret
   # and writes one forward-zone block per domain, targeting Chinese DNS servers.
   systemd.services.unbound-china-domains = {
@@ -152,7 +152,7 @@
     after = [ "agenix.service" ];
     serviceConfig = {
       Type = "oneshot";
-      RuntimeDirectory = "unbound";
+      StateDirectory = "unbound";
     };
     script = ''
       set -a; . /run/agenix/doh-env; set +a
@@ -171,7 +171,7 @@
         # DOH upstream domain from agenix secret — also via China DNS to avoid
         # bootstrap deadlock (microdoh needs to resolve it before it's up).
         emit_zone "$DOMAIN"
-      } > /run/unbound/china-domains.conf
+      } > /var/lib/unbound/china-domains.conf
     '';
   };
 
@@ -196,11 +196,13 @@
         rrset-cache-size = "256m";
         prefetch = true;
         prefetch-key = true;
+        # 4. Allow forwarding to localhost (avahi2dns, microdoh)
+        do-not-query-localhost = false;
       };
       # Include runtime-generated china-domain forward zones.
       # WARNING: this disables build-time checkconf (module handles this),
       # so the generated file MUST be valid unbound.conf syntax.
-      include = "/run/unbound/china-domains.conf";
+      include = "/var/lib/unbound/china-domains.conf";
       # .local → avahi2dns mDNS bridge (127.0.0.1:5354)
       stub-zone = [{
         name = "local.";
