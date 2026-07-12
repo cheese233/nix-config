@@ -195,9 +195,12 @@
           '180.184.2.2'
         })
 
-        local foreign_dns_group = policy.FORWARD({
+        -- microdoh uses DoH GET (RFC 8484 §4.1) which zeroes the DNS ID
+        -- and base64url-encodes the query, breaking 0x20 randomization.
+        -- Use NO_0X20 flag to disable the case-sensitivity check.
+        local foreign_dns_group = policy.FLAGS({'NO_0X20'}, policy.FORWARD({
           '::1@5443'
-        })
+        }))
 
         -- 1. Forward .local queries to avahi2dns (mDNS bridge). kresd has a
         -- built-in KR_RULE_SUB_NXDOMAIN rule for `local.` (RFC 6762 sec.
@@ -240,6 +243,7 @@
   # ==================== DNS-over-HTTPS client (microdoh) ====================
   services.microdoh = {
     enable = true;
+    package = inputs.microdoh.packages.${pkgs.stdenv.hostPlatform.system}.microdoh-h3;
     listen = "[::1]:5443";
     upstream = "https://unset";  # overridden by ExecStart script
     bootstrapDns = "127.0.0.1";
@@ -261,8 +265,7 @@
               --upstream "https://$DOMAIN$URI_PATH" \
               --bootstrap-dns ${config.services.microdoh.bootstrapDns} \
               --timeout-secs ${toString config.services.microdoh.timeoutSecs} \
-              --token "$TOKEN" \
-              --verbose
+              --token "$TOKEN"
           '';
         in "+${script}"
       );
