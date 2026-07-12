@@ -5,6 +5,8 @@ use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::proto;
+
 /// A task sent from the UDP listener to the curl worker.
 pub struct DnsTask {
     /// Raw DNS wire-format query.
@@ -15,9 +17,6 @@ pub struct DnsTask {
     /// Channel to send the DNS response back.
     pub resp_tx: oneshot::Sender<Vec<u8>>,
 }
-
-/// Minimum DNS message size (RFC 1035 §4.2.1: header is 12 bytes).
-const MIN_DNS_LEN: usize = 12;
 
 /// Listen on `addr` for UDP DNS queries and forward them through `tx`.
 pub async fn udp_loop(addr: &str, tx: mpsc::UnboundedSender<DnsTask>) -> anyhow::Result<()> {
@@ -35,8 +34,9 @@ pub async fn udp_loop(addr: &str, tx: mpsc::UnboundedSender<DnsTask>) -> anyhow:
             }
         };
 
-        if n < MIN_DNS_LEN {
-            log::debug!("dropping short packet ({n} bytes) from {peer}");
+        // Validate DNS query (minimum length, QR=0, QDCOUNT=1).
+        if let Err(e) = proto::validate_dns_query(&buf[..n]) {
+            log::debug!("dropping invalid DNS query from {peer}: {e}");
             continue;
         }
 

@@ -71,6 +71,18 @@
               description = "Request timeout in seconds.";
             };
 
+            verbose = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Enable verbose logging (debug level + libcurl protocol dump).";
+            };
+
+            pad = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = "Pad DNS queries with EDNS0 padding to 128-byte blocks (RFC 8467).";
+            };
+
             extraArgs = lib.mkOption {
               type = lib.types.listOf lib.types.str;
               default = [ ];
@@ -94,6 +106,10 @@
                   "--timeout-secs" (toString cfg.timeoutSecs)
                 ] ++ lib.optionals (cfg.tokenFile != null) [
                   "--token-file" cfg.tokenFile
+                ] ++ lib.optionals cfg.verbose [
+                  "--verbose"
+                ] ++ lib.optionals cfg.pad [
+                  "--pad"
                 ] ++ cfg.extraArgs;
               in
               {

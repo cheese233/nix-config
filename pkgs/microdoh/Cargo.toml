@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 curl = "0.4"
-curl-sys = "0.4"
-tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "macros", "time"] }
+curl-sys = { version = "0.4", features = ["poll_7_68_0"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "sync", "macros", "time", "signal"] }
 hickory-resolver = { version = "0.25", default-features = false, features = ["system-config", "tokio"] }
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }

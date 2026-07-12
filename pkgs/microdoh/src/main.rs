@@ -8,6 +8,7 @@
 mod curl_worker;
 mod doh;
 mod error;
+mod proto;
 mod udp;
 
 use std::net::IpAddr;
@@ -44,12 +45,25 @@ pub struct Cli {
     /// Request timeout in seconds.
     #[arg(long, default_value = "30")]
     pub timeout_secs: u64,
+
+    /// Enable verbose logging (debug level + libcurl protocol dump).
+    #[arg(long, short = 'v')]
+    pub verbose: bool,
+
+    /// Pad DNS queries with EDNS0 padding to 128-byte blocks (RFC 8467).
+    #[arg(long)]
+    pub pad: bool,
 }
 
 fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-
     let cli = Cli::parse();
+
+    // ── Logging: debug if --verbose, else info (env overrides both) ──
+    let default_level = if cli.verbose { "debug" } else { "info" };
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or(default_level),
+    )
+    .init();
 
     // ── Resolve token priority: --token-file > --token/$MICRODOH_TOKEN ──
     let token: Option<Arc<str>> = if let Some(ref path) = cli.token_file {
@@ -90,6 +104,8 @@ fn main() -> anyhow::Result<()> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         // ── Spawn curl worker thread ──
+        let verbose = cli.verbose;
+        let pad = cli.pad;
         let _worker = curl_worker::spawn(
             rx,
             cli.upstream.clone(),
@@ -98,10 +114,19 @@ fn main() -> anyhow::Result<()> {
             bootstrap_dns,
             token,
             cli.timeout_secs,
+            verbose,
+            pad,
         );
 
-        // ── Run UDP listener on the tokio runtime ──
-        udp::udp_loop(&cli.listen, tx).await
+        // ── Run UDP listener with graceful shutdown on SIGINT/SIGTERM ──
+        tokio::select! {
+            result = udp::udp_loop(&cli.listen, tx) => result,
+            _ = tokio::signal::ctrl_c() => {
+                log::info!("shutdown signal received, draining…");
+                // tx is dropped here → curl worker channel closes → exits
+                Ok(())
+            }
+        }
     })
 }
 

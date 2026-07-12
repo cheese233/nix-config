@@ -23,8 +23,9 @@ use crate::error::{Error, Result};
 /// DNS wire-format queries longer than this use POST instead of GET.
 const GET_MAX_DNS_LEN: usize = 1400;
 
-/// libcurl 8.13.0+ flag for TLS 1.3 / QUIC 0-RTT early data.
-const CURLSSLOPT_EARLYDATA: i64 = 8;
+/// libcurl 7.71.0+ flag for TLS 1.3 / QUIC 0-RTT early data.
+/// From curl.h: `#define CURLSSLOPT_EARLYDATA (1L << 6)`
+const CURLSSLOPT_EARLYDATA: i64 = 64;
 
 // ---------------------------------------------------------------------------
 // ResolveState — bootstrap DNS result with TTL awareness
@@ -126,18 +127,24 @@ impl DnsRuntime {
 /// Check whether the cached resolution has expired; if so, re-resolve.
 /// On failure the old (stale) state is kept — stale-while-revalidate.
 ///
-/// Uses a write-lock from the start to avoid TOCTOU races between the
-/// expiry check and the state replacement.
+/// Uses a read‑first pattern to avoid write‑locking in the hot path.
 pub fn ensure_fresh(
     state: &Arc<RwLock<ResolveState>>,
     dns_rt: &DnsRuntime,
     host: &str,
     port: u16,
 ) {
-    // Check-and-swap under a single write lock to prevent races.
+    // Fast path: read‑lock, check expiry, return if still fresh.
+    {
+        let s = state.read().unwrap();
+        if s.expires_at > Instant::now() {
+            return; // 99.999% of calls exit here with only a read lock
+        }
+    }
+    // Slow path: write‑lock, double‑check, re‑resolve.
     let mut s = state.write().unwrap();
     if s.expires_at > Instant::now() {
-        return; // still fresh
+        return; // another thread refreshed while we waited for the write lock
     }
     match dns_rt.resolve(host, port) {
         Ok(new) => *s = new,
@@ -232,8 +239,15 @@ pub fn build_easy2_request(
     token: Option<&str>,
     resolve_state: &ResolveState,
     timeout_secs: u64,
+    verbose: bool,
+    pad: bool,
 ) -> Easy2<DohHandler> {
     let use_get = query.len() <= GET_MAX_DNS_LEN;
+
+    // ── EDNS0 padding (RFC 8467) ──
+    if pad {
+        crate::proto::pad_dns_query(&mut query, 128);
+    }
 
     // ── RFC 8484 §4.1: zero the DNS ID for GET to maximize cache hits ──
     if use_get && query.len() >= 2 {
@@ -252,6 +266,11 @@ pub fn build_easy2_request(
         upstream.to_string()
     };
     easy.url(&url).unwrap();
+
+    // ── Verbose: dump libcurl protocol info to stderr ──
+    if verbose {
+        easy.verbose(true).unwrap();
+    }
 
     // ── HTTP version: H3 → H2 fallback ──
     easy.http_version(HttpVersion::V3).unwrap();
