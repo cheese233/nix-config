@@ -58,11 +58,6 @@ let
         "8920/tcp" = {};
       };
     };
-
-    fakeRootCommands = ''
-      mkdir -p /config /cache /config/log
-      chmod 755 /config /cache
-    '';
   };
 in
 {
