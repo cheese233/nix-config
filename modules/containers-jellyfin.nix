@@ -86,8 +86,6 @@ in
         LIBVA_DRIVER_NAME = "iHD";
       };
 
-      dependsOn = [ "podman-veth-jellyfin" ];
-
       extraOptions = [
         "--network=${veth.arg}"
         "--hostname=jellyfin"

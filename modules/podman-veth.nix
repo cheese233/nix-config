@@ -12,7 +12,8 @@ in
   services."podman-veth-${name}" = {
     description = "veth pair + netns for podman container ${name} on ${bridge}";
     after = [ "network.target" ];
-    wantedBy = [ "multi-user.target" ];
+    before = [ "podman-${name}.service" ];
+    requiredBy = [ "podman-${name}.service" ];
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
