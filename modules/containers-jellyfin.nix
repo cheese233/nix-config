@@ -67,7 +67,7 @@ in
       serviceConfig.Type = "oneshot";
       script = ''
         if [ ! -f /var/lib/jellyfin/config/network.xml ]; then
-          mkdir -p /var/lib/jellyfin/config /var/lib/jellyfin/cache
+          mkdir -p /var/lib/jellyfin/config/config /var/lib/jellyfin/cache
           cat > /var/lib/jellyfin/config/config/network.xml <<'XML'
 <?xml version="1.0" encoding="utf-8"?>
 <NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
