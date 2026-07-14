@@ -18,7 +18,7 @@ in
       Type = "oneshot";
       RemainAfterExit = true;
     };
-    path = with pkgs; [ iproute2 coreutils procps ];
+    path = with pkgs; [ iproute2 coreutils procps bash ];
     script = ''
       set -e
 
