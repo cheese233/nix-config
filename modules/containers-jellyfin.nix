@@ -59,7 +59,47 @@ let
   };
 in
 {
-  systemd.services = veth.services;
+  systemd.services = veth.services // {
+    "jellyfin-network-seed" = {
+      description = "Seed jellyfin network.xml for IPv6";
+      before = [ "podman-jellyfin.service" ];
+      requiredBy = [ "podman-jellyfin.service" ];
+      serviceConfig.Type = "oneshot";
+      script = ''
+        if [ ! -f /var/lib/jellyfin/config/network.xml ]; then
+          mkdir -p /var/lib/jellyfin/config
+          cat > /var/lib/jellyfin/config/network.xml <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <BaseUrl />
+  <EnableHttps>false</EnableHttps>
+  <RequireHttps>false</RequireHttps>
+  <InternalHttpPort>8096</InternalHttpPort>
+  <InternalHttpsPort>8920</InternalHttpsPort>
+  <PublicHttpPort>8096</PublicHttpPort>
+  <PublicHttpsPort>8920</PublicHttpsPort>
+  <AutoDiscovery>true</AutoDiscovery>
+  <EnableUPnP>false</EnableUPnP>
+  <EnableIPv4>true</EnableIPv4>
+  <EnableIPv6>true</EnableIPv6>
+  <EnableRemoteAccess>true</EnableRemoteAccess>
+  <LocalNetworkSubnets />
+  <LocalNetworkAddresses />
+  <KnownProxies />
+  <IgnoreVirtualInterfaces>true</IgnoreVirtualInterfaces>
+  <VirtualInterfaceNames>
+    <string>veth</string>
+  </VirtualInterfaceNames>
+  <EnablePublishedServerUriByRequest>false</EnablePublishedServerUriByRequest>
+  <PublishedServerUriBySubnet />
+  <RemoteIPFilter />
+  <IsRemoteIPFilterBlacklist>false</IsRemoteIPFilterBlacklist>
+</NetworkConfiguration>
+XML
+        fi
+      '';
+    };
+  };
 
   systemd.tmpfiles.rules = [
     "d /var/lib/jellyfin/config 0750 root root -"
