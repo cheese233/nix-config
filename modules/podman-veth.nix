@@ -45,15 +45,11 @@ in
       ip netns exec ${name} sysctl -w net.ipv6.conf.all.accept_ra=2
 
       # ── Wait for SLAAC to deliver a global IPv6 address ──
-      # ip monitor subscribes to netlink events; grep -m1 exits after
-      # the first match, closing the pipe and causing ip monitor to
-      # receive SIGPIPE → clean exit.  No polling, no sleep loop.
-      #
-      # If the RA never arrives within raTimeout, we exit non-zero so
-      # systemd retries the whole unit.  No fallback routes.
+      # ip monitor is netlink-event-driven (no polling).  stdout pipe
+      # buffering is defeated by stdbuf -oL (line-buffered).
       echo "Waiting up to ${toString raTimeout}s for SLAAC address on eth0..."
       timeout ${toString raTimeout} sh -c '
-        ip netns exec ${name} ip -6 monitor address dev eth0 2>/dev/null |
+        ip netns exec ${name} stdbuf -oL ip -6 monitor address dev eth0 2>/dev/null |
         grep -m1 "scope global"
       '
 
