@@ -33,11 +33,12 @@ let
       freetype
       sqlite
       bash
+      coreutils
     ] ++ [ mdnsPublisher ];
 
     config = {
       Cmd = [
-        "/bin/sh" "-e" "-c"
+        "/bin/sh" "-c"
         ''
           ${mdnsPublisher}/bin/mdns-publisher \
             -iface eth0 -hostname jellyfin &
@@ -50,13 +51,16 @@ let
       Env = [
         "TZ=Asia/Shanghai"
         "LIBVA_DRIVER_NAME=iHD"
-        "TMPDIR=/cache"
       ];
       ExposedPorts = {
         "8096/tcp" = {};
         "8920/tcp" = {};
       };
     };
+
+    fakeRootCommands = ''
+      mkdir -m 1777 /tmp
+    '';
   };
 in
 {
@@ -88,6 +92,8 @@ in
       extraOptions = [
         "--network=${veth.arg}"
         "--hostname=jellyfin"
+        "--cap-drop=ALL"
+        "--security-opt=no-new-privileges:true"
         "--device=/dev/dri/renderD128:/dev/dri/renderD128"
         "--device=/dev/dri/card0:/dev/dri/card0"
       ];
