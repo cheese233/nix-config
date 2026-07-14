@@ -24,6 +24,9 @@ in
 
       install -d -m 755 /run/netns
 
+      # Clean up leftover veth host side from a previous failed run.
+      ip link del ${hostIf} 2>/dev/null || true
+
       # 1. Create persistent netns
       ip netns add ${name} 2>/dev/null || true
 
