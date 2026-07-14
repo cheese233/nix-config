@@ -42,8 +42,6 @@ let
           ${mdnsPublisher}/bin/mdns-publisher \
             -iface eth0 -hostname jellyfin &
           exec ${pkgsUnstable.jellyfin}/bin/jellyfin \
-            --ffmpeg ${pkgsUnstable.jellyfin-ffmpeg}/bin/ffmpeg \
-            --webdir ${pkgsUnstable.jellyfin-web}/share/jellyfin-web \
             --datadir /config \
             --cachedir /cache \
             --logdir /config/log
