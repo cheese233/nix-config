@@ -50,6 +50,7 @@ let
       Env = [
         "TZ=Asia/Shanghai"
         "LIBVA_DRIVER_NAME=iHD"
+        "TMPDIR=/cache"
       ];
       ExposedPorts = {
         "8096/tcp" = {};
