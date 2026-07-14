@@ -1,11 +1,6 @@
 { config, lib, pkgs, inputs, ... }:
 
 let
-  pkgsUnstable = import inputs.nixpkgs-unstable {
-    system = pkgs.stdenv.hostPlatform.system;
-    config.allowUnfree = true;
-  };
-
   mdnsPublisher = inputs.mdns-publisher.packages.x86_64-linux.default;
 
   mkPodmanVeth = import ../modules/podman-veth.nix { inherit pkgs; };
@@ -21,7 +16,7 @@ let
     tag = "latest";
     maxLayers = 20;
 
-    contents = with pkgsUnstable; [
+    contents = with pkgs; [
       jellyfin
       jellyfin-web
       jellyfin-ffmpeg
@@ -41,7 +36,7 @@ let
         ''
           ${mdnsPublisher}/bin/mdns-publisher \
             -iface eth0 -hostname jellyfin &
-          exec ${pkgsUnstable.jellyfin}/bin/jellyfin \
+          exec ${pkgs.jellyfin}/bin/jellyfin \
             --datadir /config \
             --cachedir /cache \
             --logdir /config/log
