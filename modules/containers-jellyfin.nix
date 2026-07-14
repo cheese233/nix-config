@@ -33,7 +33,6 @@ let
       freetype
       sqlite
       bash
-      coreutils
     ] ++ [ mdnsPublisher ];
 
     config = {
@@ -57,10 +56,6 @@ let
         "8920/tcp" = {};
       };
     };
-
-    fakeRootCommands = ''
-      mkdir -m 1777 /tmp
-    '';
   };
 in
 {
@@ -92,6 +87,7 @@ in
       extraOptions = [
         "--network=${veth.arg}"
         "--hostname=jellyfin"
+        "--tmpfs=/tmp"
         "--cap-drop=ALL"
         "--security-opt=no-new-privileges:true"
         "--device=/dev/dri/renderD128:/dev/dri/renderD128"
