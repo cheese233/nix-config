@@ -33,25 +33,36 @@ in
       # 2. Create veth pair
       ip link add ${hostIf} type veth peer name ${nsIf}
 
-      # 3. Host side → bridge
-      ip link set ${hostIf} master ${bridge} up
-
-      # 4. Netns side → rename to eth0, set MAC, bring up
+      # 3. Move ns side into netns, rename, set MAC
       ip link set ${nsIf} netns ${name}
       ip netns exec ${name} ip link set ${nsIf} name eth0
-      ip netns exec ${name} ip link set eth0 address ${mac} up
+      ip netns exec ${name} ip link set eth0 address ${mac}
 
-      # 5. Accept RAs (SLAAC + RDNSS)
+      # 4. Start netlink monitor BEFORE bringing the interface up,
+      #    so we don't miss the SLAAC event.
+      slaacFile=/tmp/slaac-${name}
+      ip netns exec ${name} \
+        ip -6 monitor addr dev eth0 > "$slaacFile" 2>/dev/null &
+      monitorPid=$!
+
+      # 5. Bring the interface up and attach host side to bridge.
+      ip netns exec ${name} ip link set eth0 up
+      ip link set ${hostIf} master ${bridge} up
+
+      # 6. Accept RAs (SLAAC + RDNSS)
       ip netns exec ${name} sysctl -w net.ipv6.conf.all.accept_ra=2
 
-      # ── Wait for SLAAC to deliver a global IPv6 address ──
-      # ip monitor is netlink-event-driven (no polling).  stdout pipe
-      # buffering is defeated by stdbuf -oL (line-buffered).
+      # 7. Wait for a global IPv6 address to appear.
+      #    tail -f uses inotify (no polling); grep -m1 closes the pipe.
       echo "Waiting up to ${toString raTimeout}s for SLAAC address on eth0..."
       timeout ${toString raTimeout} sh -c '
-        ip netns exec ${name} stdbuf -oL ip -6 monitor address dev eth0 2>/dev/null |
-        grep -m1 "scope global"
-      '
+        tail -n+1 -f "$1" | grep -m1 "scope global"
+      ' _ "$slaacFile"
+
+      # 8. Tear down the monitor.
+      kill "$monitorPid" 2>/dev/null || true
+      wait "$monitorPid" 2>/dev/null || true
+      rm -f "$slaacFile" || true
 
       echo "Network ready for container ${name}."
     '';
