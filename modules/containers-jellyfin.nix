@@ -63,6 +63,11 @@ in
 {
   systemd.services = veth.services;
 
+  systemd.tmpfiles.rules = [
+    "d /var/lib/jellyfin/config 0750 root root -"
+    "d /var/lib/jellyfin/cache  0750 root root -"
+  ];
+
   virtualisation.oci-containers = {
     backend = "podman";
     containers.jellyfin = {
