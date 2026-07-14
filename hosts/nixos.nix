@@ -3,6 +3,7 @@
   imports = [
     ../hardware/nixos.nix
     ../modules/zfs-kernel.nix
+    ../modules/containers-jellyfin.nix
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
@@ -15,6 +16,8 @@
 
   networking.hostName = "nixos";
   networking.nameservers = [ "::1" "127.0.0.1" ];
+
+  virtualisation.podman.enable = true;
 
   # https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion
   # Do NOT change this after initial install unless you know what you're doing.
