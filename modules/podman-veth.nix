@@ -15,7 +15,8 @@ in
 {
   arg = "ns:/run/netns/${name}";
 
-  services."podman-veth-${name}" = {
+  services = {
+    "podman-veth-${name}" = {
     description = "veth pair + netns for podman container ${name} on ${bridge}";
     after = [ "network.target" ];
     before = [ "podman-${name}.service" ];
@@ -76,9 +77,10 @@ in
       ${pkgs.iproute2}/bin/ip netns del ${name} 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip link del ${hostIf} 2>/dev/null || true
     '';
-  };
-} // lib.optionalAttrs mdns {
-  services."mdns-publisher-${name}" = {
+    };
+
+  } // lib.optionalAttrs mdns {
+    "mdns-publisher-${name}" = {
     description = "mDNS publisher for ${mdnsName}.local";
     after = [ "podman-${name}.service" "podman-veth-${name}.service" ];
     requires = [ "podman-veth-${name}.service" ];
@@ -89,5 +91,6 @@ in
       RestartSec = 5;
     };
     script = "ip netns exec ${name} ${mdnsPublisher}/bin/mdns-publisher -iface eth0 -hostname ${mdnsName} -ttl ${toString mdnsTtl}";
+    };
   };
 }
