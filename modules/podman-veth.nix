@@ -82,6 +82,7 @@ in
   } // lib.optionalAttrs mdns {
     "mdns-publisher-${name}" = {
     description = "mDNS publisher for ${mdnsName}.local";
+    path = with pkgs; [ iproute2 ];
     after = [ "podman-${name}.service" "podman-veth-${name}.service" ];
     requires = [ "podman-veth-${name}.service" ];
     wantedBy = [ "multi-user.target" ];
