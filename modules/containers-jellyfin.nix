@@ -1,14 +1,13 @@
 { config, lib, pkgs, inputs, ... }:
 
 let
-  mdnsPublisher = inputs.mdns-publisher.packages.x86_64-linux.default;
-
-  mkPodmanVeth = import ../modules/podman-veth.nix { inherit pkgs; };
+  mkPodmanVeth = import ../modules/podman-veth.nix { inherit pkgs lib inputs; };
 
   veth = mkPodmanVeth {
     name   = "jellyfin";
     bridge = "br-lan";
     mac    = "02:00:00:00:00:03";
+    mdns   = true;
   };
 
   # Official Jellyfin image
@@ -52,6 +51,7 @@ in
         "--security-opt=no-new-privileges:true"
         "--device=/dev/dri/renderD128:/dev/dri/renderD128"
         "--device=/dev/dri/card0:/dev/dri/card0"
+        "--dns=fdea:d:beef::1"
       ];
     };
 }

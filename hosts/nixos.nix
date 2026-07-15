@@ -345,6 +345,7 @@
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       lan-to-fw-mdns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 5353 ]; };
+      lan-to-lan-mdns = { from = [ "lan" ]; to = [ "lan" ]; allowedUDPPorts = [ 5353 ]; extraLines = [ "ip6 daddr ff02::fb udp dport 5353 accept" ]; };
       lan-to-fw-dhcpv6 = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };
       lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
       lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };

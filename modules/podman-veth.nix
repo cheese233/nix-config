@@ -1,10 +1,16 @@
-{ pkgs }:
+{ pkgs, lib, inputs }:
 
-{ name, bridge, mac, raTimeout ? 120 }:
+{ name, bridge, mac, raTimeout ? 120
+, mdns ? false
+, hostname ? null  # null = use name as hostname
+, mdnsPublisher ? inputs.mdns-publisher.packages.${pkgs.stdenv.hostPlatform.system}.default
+, mdnsTtl ? 120
+}:
 
 let
   hostIf = "veth-${name}-h";
   nsIf   = "veth-${name}-c";
+  mdnsName = if hostname != null then hostname else name;
 in
 {
   arg = "ns:/run/netns/${name}";
@@ -70,5 +76,18 @@ in
       ${pkgs.iproute2}/bin/ip netns del ${name} 2>/dev/null || true
       ${pkgs.iproute2}/bin/ip link del ${hostIf} 2>/dev/null || true
     '';
+  };
+} // lib.optionalAttrs mdns {
+  services."mdns-publisher-${name}" = {
+    description = "mDNS publisher for ${mdnsName}.local";
+    after = [ "podman-${name}.service" "podman-veth-${name}.service" ];
+    requires = [ "podman-veth-${name}.service" ];
+    wantedBy = [ "multi-user.target" ];
+    serviceConfig = {
+      Type = "simple";
+      Restart = "always";
+      RestartSec = 5;
+    };
+    script = "ip netns exec ${name} ${mdnsPublisher}/bin/mdns-publisher -iface eth0 -hostname ${mdnsName} -ttl ${toString mdnsTtl}";
   };
 }
