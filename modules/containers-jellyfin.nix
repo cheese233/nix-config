@@ -20,7 +20,11 @@ let
 in
 {
   systemd.services = veth.services // {
-    "${config.virtualisation.oci-containers.containers.jellyfin.serviceName}".serviceConfig.StateDirectory = "jellyfin";
+    "${config.virtualisation.oci-containers.containers.jellyfin.serviceName}" = {
+      serviceConfig.StateDirectory = "jellyfin";
+      after = [ "podman-veth-jellyfin.service" ];
+      requires = [ "podman-veth-jellyfin.service" ];
+    };
   };
 
   systemd.tmpfiles.rules = [
