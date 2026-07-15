@@ -18,6 +18,7 @@
   networking.nameservers = [ "::1" "127.0.0.1" ];
 
   virtualisation.podman.enable = true;
+  virtualisation.oci-containers.backend = "podman";
 
   # https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion
   # Do NOT change this after initial install unless you know what you're doing.
