@@ -20,7 +20,9 @@ let
   };
 in
 {
-  systemd.services = veth.services;
+  systemd.services = veth.services // {
+    "${config.virtualisation.oci-containers.containers.jellyfin.serviceName}".serviceConfig.StateDirectory = "jellyfin";
+  };
 
   virtualisation.oci-containers.containers.jellyfin = {
       image = "ghcr.io/jellyfin/jellyfin:latest";
