@@ -24,6 +24,11 @@ in
     "${config.virtualisation.oci-containers.containers.jellyfin.serviceName}".serviceConfig.StateDirectory = "jellyfin";
   };
 
+  systemd.tmpfiles.rules = [
+    "d /var/lib/jellyfin/config 0755 root root -"
+    "d /var/lib/jellyfin/cache 0755 root root -"
+  ];
+
   virtualisation.oci-containers.containers.jellyfin = {
       image = "ghcr.io/jellyfin/jellyfin:latest";
       imageFile = jellyfinImage;
