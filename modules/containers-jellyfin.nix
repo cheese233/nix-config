@@ -11,10 +11,46 @@ let
     mac    = "02:00:00:00:00:03";
   };
 
-  jellyfinImage = pkgs.dockerTools.streamLayeredImage {
+  nixBaseImage = pkgs.dockerTools.pullImage {
+    imageName = "ghcr.io/nixos/nix";
+    imageDigest = "sha256:d78540374f6a886653cba47d5c3f61c5a41d42e2a8db2607b8d68cb226fd463e";
+    sha256 = "sha256-QOJlic/KKUNyCP/+NdOJmbukJwjWiiykqQTrEeLeQd4=";
+    finalImageTag = "latest";
+  };
+
+  networkXml = pkgs.writeText "network.xml" ''
+    <?xml version="1.0" encoding="utf-8"?>
+    <NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+      <BaseUrl />
+      <EnableHttps>false</EnableHttps>
+      <RequireHttps>false</RequireHttps>
+      <InternalHttpPort>8096</InternalHttpPort>
+      <InternalHttpsPort>8920</InternalHttpsPort>
+      <PublicHttpPort>8096</PublicHttpPort>
+      <PublicHttpsPort>8920</PublicHttpsPort>
+      <AutoDiscovery>true</AutoDiscovery>
+      <EnableUPnP>false</EnableUPnP>
+      <EnableIPv4>true</EnableIPv4>
+      <EnableIPv6>true</EnableIPv6>
+      <EnableRemoteAccess>true</EnableRemoteAccess>
+      <LocalNetworkSubnets />
+      <LocalNetworkAddresses />
+      <KnownProxies />
+      <IgnoreVirtualInterfaces>true</IgnoreVirtualInterfaces>
+      <VirtualInterfaceNames>
+        <string>veth</string>
+      </VirtualInterfaceNames>
+      <EnablePublishedServerUriByRequest>false</EnablePublishedServerUriByRequest>
+      <PublishedServerUriBySubnet />
+      <RemoteIPFilter />
+      <IsRemoteIPFilterBlacklist>false</IsRemoteIPFilterBlacklist>
+    </NetworkConfiguration>
+  '';
+
+  jellyfinImage = pkgs.dockerTools.buildImage {
     name = "jellyfin";
     tag = "latest";
-    maxLayers = 20;
+    fromImage = nixBaseImage;
 
     contents = with pkgs; [
       jellyfin
@@ -29,6 +65,12 @@ let
       sqlite
       bash
     ] ++ [ mdnsPublisher ];
+
+    runAsRoot = ''
+      # Create default config directories and seed network.xml
+      mkdir -p /config/config /config/cache
+      cp ${networkXml} /config/config/network.xml
+    '';
 
     config = {
       Cmd = [
@@ -54,53 +96,13 @@ let
   };
 in
 {
-  systemd.services = veth.services // {
-    "jellyfin-network-seed" = {
-      description = "Seed jellyfin network.xml for IPv6";
-      before = [ "podman-jellyfin.service" ];
-      requiredBy = [ "podman-jellyfin.service" ];
-      serviceConfig.Type = "oneshot";
-      script = ''
-        if [ ! -f /var/lib/jellyfin/config/network.xml ]; then
-          mkdir -p /var/lib/jellyfin/config/config /var/lib/jellyfin/cache
-          cat > /var/lib/jellyfin/config/config/network.xml <<'XML'
-<?xml version="1.0" encoding="utf-8"?>
-<NetworkConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
-  <BaseUrl />
-  <EnableHttps>false</EnableHttps>
-  <RequireHttps>false</RequireHttps>
-  <InternalHttpPort>8096</InternalHttpPort>
-  <InternalHttpsPort>8920</InternalHttpsPort>
-  <PublicHttpPort>8096</PublicHttpPort>
-  <PublicHttpsPort>8920</PublicHttpsPort>
-  <AutoDiscovery>true</AutoDiscovery>
-  <EnableUPnP>false</EnableUPnP>
-  <EnableIPv4>true</EnableIPv4>
-  <EnableIPv6>true</EnableIPv6>
-  <EnableRemoteAccess>true</EnableRemoteAccess>
-  <LocalNetworkSubnets />
-  <LocalNetworkAddresses />
-  <KnownProxies />
-  <IgnoreVirtualInterfaces>true</IgnoreVirtualInterfaces>
-  <VirtualInterfaceNames>
-    <string>veth</string>
-  </VirtualInterfaceNames>
-  <EnablePublishedServerUriByRequest>false</EnablePublishedServerUriByRequest>
-  <PublishedServerUriBySubnet />
-  <RemoteIPFilter />
-  <IsRemoteIPFilterBlacklist>false</IsRemoteIPFilterBlacklist>
-</NetworkConfiguration>
-XML
-        fi
-      '';
-    };
-  };
+  systemd.services = veth.services;
 
   virtualisation.oci-containers = {
     backend = "podman";
     containers.jellyfin = {
       image = "jellyfin:latest";
-      imageStream = jellyfinImage;
+      imageFile = jellyfinImage;
       autoStart = true;
 
       volumes = [
