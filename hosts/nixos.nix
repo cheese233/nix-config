@@ -12,6 +12,7 @@
     inputs.dibbler.nixosModules.default
     ../modules/microvm-traefik.nix
     ../modules/amneziawg.nix
+    ../modules/socks5-wpad.nix
   ];
 
   networking.hostName = "nixos";
@@ -159,6 +160,7 @@
         option domain local
         option lifetime 3600
         option 113 duid 80:00:00:00:00:00:00:00:00
+        option 252 string "http://wpad.local/wpad.dat"
       }
     '';
   };
@@ -219,6 +221,9 @@
           "127.0.0.0/8 allow"
           "::1/128 allow"
           "fdea:d:beef::/64 allow"
+        ];
+        local-data = [
+          "\"wpad.local. IN AAAA fdea:d:beef::1\""
         ];
         # 2. DNS64 — synthesize AAAA from A records using NAT64 prefix
         module-config = ''"dns64 iterator"'';

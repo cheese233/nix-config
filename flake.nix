@@ -28,6 +28,10 @@
       url = "./pkgs/dibbler";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    socks5 = {
+      url = "./pkgs/socks5";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     microvm = {
       url = "github:microvm-nix/microvm.nix";
