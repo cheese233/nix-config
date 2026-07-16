@@ -18,7 +18,9 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         {
-          default = pkgs.haskellPackages.callCabal2nix "socks5" socks5-src { };
+          default = pkgs.haskell.lib.compose.doJailbreak (
+            pkgs.haskellPackages.callCabal2nix "socks5" socks5-src { }
+          );
         }
       );
 
