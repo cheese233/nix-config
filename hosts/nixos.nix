@@ -327,6 +327,10 @@
     wkpfStrict = false;
   };
 
+  systemd.services.tayga.postStart = ''
+    ${pkgs.iproute2}/bin/ip -6 route replace 64:ff9b::/96 dev nat64 src fdea:d:beef::1
+  '';
+
   # ==================== Firewall ====================
   networking.firewall.enable = false;
 
