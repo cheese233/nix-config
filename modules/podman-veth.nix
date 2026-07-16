@@ -36,6 +36,7 @@ in
 
       # 1. Create persistent netns
       ip netns add ${name} 2>/dev/null || true
+      ip netns exec ${name} ip link set lo up
 
       # 2. Create veth pair
       ip link add ${hostIf} type veth peer name ${nsIf}
