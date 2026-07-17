@@ -152,7 +152,7 @@ in
             address = ":443";
           };
           entryPoints.dashboard = {
-            address = "[fdea:d:beef::ff:fe77:6562]:8443";
+            address = ":8443";
           };
           # UDP entry point for AmneziaWG
           entryPoints.awg-udp = {
@@ -176,9 +176,7 @@ in
             rule = "Host(`traefik.local`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))";
             service = "api@internal";
             entryPoints = [ "dashboard" ];
-            middlewares = [ "lan-only" ];
           };
-          http.middlewares.lan-only.ipAllowList.sourceRange = [ "fdea:d:beef::/48" ];
           udp.routers.awg = {
             entryPoints = [ "awg-udp" ];
             service = "awg-backend";
@@ -228,8 +226,11 @@ in
 
       networking.firewall = {
         enable = true;
-        allowedTCPPorts = [ 80 443 8443 ];
+        allowedTCPPorts = [ 80 443 ];
         allowedUDPPorts = [ 47999 ];
+        extraInputRules = ''
+          tcp dport 8443 ct mark != 0xd accept
+        '';
       };
 
     };
@@ -269,6 +270,7 @@ in
       from = [ "wan" ];
       to = [ "traefik" ];
       verdict = "accept";
+      extraLines = [ "ct mark set 0xd" ];
     };
     # Allow Traefik to forward UDP traffic to host's AmneziaWG
     rules.traefik-to-fw-awg = {
