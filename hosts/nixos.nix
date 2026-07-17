@@ -13,10 +13,13 @@
     ../modules/microvm-traefik.nix
     ../modules/amneziawg.nix
     ../modules/socks5-wpad.nix
+    ../modules/cockpit.nix
   ];
 
   networking.hostName = "nixos";
   networking.nameservers = [ "::1" "127.0.0.1" ];
+
+  services.nginx.virtualHosts."lan".listen = [ { addr = "fdea:d:beef::1"; port = 80; } ];
 
   virtualisation.podman.enable = true;
   virtualisation.oci-containers.backend = "podman";
@@ -357,6 +360,7 @@
       lan-to-lan-mdns = { from = [ "lan" ]; to = [ "lan" ]; allowedUDPPorts = [ 5353 ]; extraLines = [ "ip6 daddr ff02::fb udp dport 5353 accept" ]; };
       lan-to-fw-dhcpv6 = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };
       lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
+      lan-to-fw-cockpit = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = [ 9090 ]; };
       lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };
       lan-to-awg = { from = [ "lan" ]; to = [ "awg" ]; verdict = "accept"; };
       awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };

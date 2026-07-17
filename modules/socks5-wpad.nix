@@ -34,13 +34,6 @@ let
     EOF
     ln -s wpad.dat $out/proxy.pac
   '';
-
-  # Custom MIME types file to ensure wpad.dat and proxy.pac are served with correct headers
-  mimeTypes = pkgs.writeText "mime.types" ''
-    application/x-ns-proxy-autoconfig pac
-    application/x-ns-proxy-autoconfig dat
-    text/plain txt log
-  '';
 in
 {
   imports = [
@@ -54,18 +47,26 @@ in
     port = socks5Port;
   };
 
-  # Host WPAD configuration via darkhttpd on LAN only
-  services.darkhttpd = {
+  services.nginx = {
     enable = true;
-    address = lanIp;
-    port = 80;
-    rootDir = wpadRoot;
-    extraArgs = [
-      "--mimetypes" "${mimeTypes}"
-    ];
+
+    appendHttpConfig = ''
+      types {
+        application/x-ns-proxy-autoconfig pac dat;
+      }
+    '';
+
+    virtualHosts."lan" = {
+      locations."/wpad.dat" = {
+        alias = "${wpadRoot}/wpad.dat";
+      };
+      locations."/proxy.pac" = {
+        alias = "${wpadRoot}/proxy.pac";
+      };
+    };
   };
 
-  # Open firewall ports on the router for SOCKS5 and Nginx WPAD server
+  # Open firewall ports on the router for SOCKS5 and WPAD
   networking.nftables.firewall.rules = {
     lan-to-fw-wpad = {
       from = [ "lan" ];
