@@ -27,10 +27,6 @@
 
             vendorHash = "sha256-s+NuVtHmN963kNyaIsA5q9a+e1uDvQsH4qNDF63gk0Y=";
 
-            preBuild = "go generate ./...";
-
-            nativeBuildInputs = with pkgs; [ protobuf protoc-gen-go ];
-
             doCheck = false;
 
             meta = with pkgs.lib; {
