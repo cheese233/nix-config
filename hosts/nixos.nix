@@ -19,7 +19,7 @@
   networking.hostName = "nixos";
   networking.nameservers = [ "::1" "127.0.0.1" ];
 
-  services.nginx.virtualHosts."lan".listen = [ { addr = "fdea:d:beef::1"; port = 80; } ];
+  services.nginx.virtualHosts."lan".listen = [ { addr = "[fdea:d:beef::1]"; port = 80; } ];
 
   virtualisation.podman.enable = true;
   virtualisation.oci-containers.backend = "podman";
