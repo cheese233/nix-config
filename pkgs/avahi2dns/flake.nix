@@ -16,16 +16,22 @@
         {
           default = pkgs.buildGoModule rec {
             pname = "avahi2dns";
-            version = "0.2.0";
+            version = "0.2.0-dirty";
 
             src = pkgs.fetchFromGitHub {
               owner = "LouisBrunner";
               repo = "avahi2dns";
-              rev = "${version}";
-              hash = "sha256-F4P/g/x+gK1+84ubXK52xhvAfVddhdbrrEo9A0sdjC4=";
+              rev = "b7ff69df6e692f44e698462b5aea21777f8f6896";
+              hash = "sha256-k9Yi6c0LJw6w5RgxfNM82HQ/xDBCqyoSdKlnSfjOpxI=";
             };
 
-            vendorHash = "sha256-BSepcq0LKwEtetYhs/dQ2y5EkCAbkSlpRlWHrhlfqmc=";
+            vendorHash = "sha256-s+NuVtHmN963kNyaIsA5q9a+e1uDvQsH4qNDF63gk0Y=";
+
+            preBuild = "go generate ./...";
+
+            nativeBuildInputs = with pkgs; [ protobuf protoc-gen-go ];
+
+            doCheck = false;
 
             meta = with pkgs.lib; {
               description = "Bridge unicast DNS queries for a TLD to Avahi via D-Bus";
