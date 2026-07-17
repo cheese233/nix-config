@@ -57,11 +57,11 @@ in
     '';
 
     virtualHosts."lan" = {
-      locations."/wpad.dat" = {
-        alias = "${wpadRoot}/wpad.dat";
+      locations."= /wpad.dat" = {
+        root = wpadRoot;
       };
-      locations."/proxy.pac" = {
-        alias = "${wpadRoot}/proxy.pac";
+      locations."= /proxy.pac" = {
+        root = wpadRoot;
       };
     };
   };
