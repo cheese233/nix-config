@@ -398,7 +398,8 @@
         "microvm": "microvm",
         "nixpkgs": "nixpkgs_2",
         "nnf": "nnf",
-        "secureboot": "secureboot"
+        "secureboot": "secureboot",
+        "socks5": "socks5"
       }
     },
     "rust-overlay": {
@@ -439,6 +440,39 @@
         "type": "path"
       },
       "parent": []
+    },
+    "socks5": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "socks5-src": "socks5-src"
+      },
+      "locked": {
+        "path": "./pkgs/socks5",
+        "type": "path"
+      },
+      "original": {
+        "path": "./pkgs/socks5",
+        "type": "path"
+      },
+      "parent": []
+    },
+    "socks5-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1752031490,
+        "narHash": "sha256-FFen9dmQBJje+KBB/EtZ1I9tk8njFzI1uksx4HIswZE=",
+        "owner": "homovetus",
+        "repo": "socks5",
+        "rev": "58a71fc9c739820c7f5fd9e6a9733d18e280a6b4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "homovetus",
+        "repo": "socks5",
+        "type": "github"
+      }
     },
     "spectrum": {
       "flake": false,
