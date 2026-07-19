@@ -4,6 +4,7 @@
     ../hardware/nixos.nix
     ../modules/zfs-kernel.nix
     ../modules/containers-jellyfin.nix
+    ../modules/containers-vaultwarden.nix
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
