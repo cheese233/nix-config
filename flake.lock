@@ -263,18 +263,18 @@
       },
       "parent": []
     },
-    "microdoh": {
+    "microdoh3": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
         ]
       },
       "locked": {
-        "path": "./pkgs/microdoh",
+        "path": "./pkgs/microdoh3",
         "type": "path"
       },
       "original": {
-        "path": "./pkgs/microdoh",
+        "path": "./pkgs/microdoh3",
         "type": "path"
       },
       "parent": []
@@ -394,7 +394,7 @@
         "dibbler": "dibbler",
         "dnsmasq-china-list": "dnsmasq-china-list",
         "mdns-publisher": "mdns-publisher",
-        "microdoh": "microdoh",
+        "microdoh3": "microdoh3",
         "microvm": "microvm",
         "nixpkgs": "nixpkgs_2",
         "nnf": "nnf",

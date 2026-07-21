@@ -9,7 +9,7 @@
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
     inputs.avahi2dns.nixosModules.default
-    inputs.microdoh.nixosModules.default
+    inputs.microdoh3.nixosModules.default
     inputs.dibbler.nixosModules.default
     ../modules/microvm-traefik.nix
     ../modules/amneziawg.nix
@@ -204,9 +204,9 @@
           emit_zone "$domain"
         done < /etc/unbound/china-domain-list.txt
         # DOH upstream domain from agenix secret — also via China DNS to avoid
-        # bootstrap deadlock (microdoh needs to resolve the DoH domain before it's up).
+        # bootstrap deadlock (microdoh3 needs to resolve the DoH domain before it's up).
         emit_zone "$DOMAIN"
-        # 3. Default fallback → microdoh (DoH client on [::1]:5443)
+        # 3. Default fallback → microdoh3 (DoH/3 client on [::1]:5443)
         echo "forward-zone:"
         echo "    name: ."
         echo "    forward-addr: ::1@5443"
@@ -255,10 +255,10 @@
     domain = "local";
   };
 
-  # ==================== DNS-over-HTTPS client (microdoh) ====================
-  services.microdoh = {
+  # ==================== DNS-over-HTTP/3 client (microdoh3) ====================
+  services.microdoh3 = {
     enable = true;
-    package = inputs.microdoh.packages.${pkgs.stdenv.hostPlatform.system}.microdoh-h3;
+    package = inputs.microdoh3.packages.${pkgs.stdenv.hostPlatform.system}.microdoh3;
     listen = "[::1]:5443";
     upstream = "https://unset";  # overridden by ExecStart script
     bootstrapDns = "127.0.0.1";
@@ -266,20 +266,21 @@
     tokenFile = null;
   };
 
-  systemd.services.microdoh = {
+  systemd.services.microdoh3 = {
     after = lib.mkForce [ "network.target" "unbound.service" "agenix.service" ];
     wants = lib.mkForce [ "unbound.service" ];
 
     serviceConfig = {
       ExecStart = lib.mkForce (
         let
-          script = pkgs.writeShellScript "microdoh-start" ''
+          script = pkgs.writeShellScript "microdoh3-start" ''
             set -a; . /run/agenix/doh-env; set +a
-            exec ${config.services.microdoh.package}/bin/microdoh \
-              --listen ${config.services.microdoh.listen} \
+            exec ${config.services.microdoh3.package}/bin/microdoh3 \
+              --listen ${config.services.microdoh3.listen} \
               --upstream "https://$DOMAIN$URI_PATH" \
-              --bootstrap-dns ${config.services.microdoh.bootstrapDns} \
-              --timeout-secs ${toString config.services.microdoh.timeoutSecs} \
+              --bootstrap-dns ${config.services.microdoh3.bootstrapDns} \
+              --timeout-secs ${toString config.services.microdoh3.timeoutSecs} \
+              --workers ${toString config.services.microdoh3.workers} \
               --token "$TOKEN"
           '';
         in "+${script}"
@@ -418,7 +419,7 @@
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
         pname(unbound) -> must_rules
-        pname(microdoh) -> must_rules
+        pname(microdoh3) -> must_rules
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct

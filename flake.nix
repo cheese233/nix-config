@@ -20,8 +20,8 @@
       url = "./pkgs/avahi2dns";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    microdoh = {
-      url = "./pkgs/microdoh";
+    microdoh3 = {
+      url = "./pkgs/microdoh3";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     dibbler = {
