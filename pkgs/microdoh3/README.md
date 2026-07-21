@@ -14,7 +14,9 @@ no libcurl, no hickory.
 ## Architecture
 
 ```
-supervisor (fork × N → waitpid → restart w/ backoff)
+supervisor (sole bootstrap-DNS resolver, fork × N, waitpid,
+            restart w/ backoff, keeps resolution fresh in shm)
+ │   memfd + MAP_SHARED page (seqlock) — children map PROT_READ
  └── child i: pinned to physical CPU core i
       ├── SO_REUSEPORT DNS socket (kernel load-balancing)
       ├── own QUIC connection upstream (persistent, keep-alive)
@@ -22,7 +24,12 @@ supervisor (fork × N → waitpid → restart w/ backoff)
 ```
 
 Everything in the request path runs on one thread per core — no channels,
-no context switches, no shared state.
+no context switches. Upstream addresses live in a single shared-memory
+page written only by the supervisor (a seqlock-guarded memfd, mapped
+read-only by children). All bootstrap DNS — startup resolution and TTL
+refresh — happens in the supervisor (cold path): children never do
+blocking DNS; they pick up refreshed addresses with a single atomic load
+per housekeeping pass.
 
 ## Latency techniques
 

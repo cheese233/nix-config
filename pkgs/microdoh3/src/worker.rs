@@ -4,14 +4,14 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use noq_proto as proto;
 
-use crate::bootstrap::{Bootstrap, ResolveState};
+use crate::shared;
 use crate::dns;
 use crate::event::{Poller, TOKEN_DNS, TOKEN_QUIC, TOKEN_SIGNAL, TOKEN_TIMER};
 use crate::h3::{self, H3, H3Event};
@@ -22,8 +22,6 @@ use crate::url::HttpsUrl;
 const GET_MAX_DNS_LEN: usize = 1400;
 /// Max wire size we accept from local clients.
 const MAX_DNS_LEN: usize = 4096;
-/// Bootstrap re-resolution retry delay after a failure.
-const BOOTSTRAP_RETRY: Duration = Duration::from_secs(60);
 /// Reconnect backoff schedule cap.
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(5);
 /// QUIC keep-alive ping interval.
@@ -34,13 +32,19 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 pub struct WorkerConfig {
     pub listen: SocketAddr,
     pub upstream: HttpsUrl,
-    pub bootstrap_dns: IpAddr,
     pub token: Option<Arc<str>>,
     pub timeout: Duration,
     pub pad: bool,
     pub busy_poll: bool,
     pub spin: bool,
     pub mlockall: bool,
+    /// Inherited fd of the supervisor's shared resolution page (mapped
+    /// read-only here). The supervisor is the sole writer and keeps it
+    /// fresh — children never do blocking DNS.
+    pub shm_fd: std::os::fd::RawFd,
+    /// Worker index (informational, for logs).
+    #[allow(dead_code)]
+    pub child_idx: usize,
 }
 
 struct Pending {
@@ -99,31 +103,6 @@ fn bind_dns_socket(addr: SocketAddr, busy_poll: bool) -> io::Result<UdpSocket> {
     Ok(fd.into())
 }
 
-/// Resolve the upstream host, IPv6 first (works well with NAT64/DNS64).
-fn resolve_upstream(
-    bootstrap: &Bootstrap,
-    host: &str,
-    port: u16,
-) -> io::Result<(ResolveState, Vec<SocketAddr>)> {
-    let state = bootstrap
-        .resolve(host)
-        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
-    let mut v6: Vec<SocketAddr> = state
-        .addrs
-        .iter()
-        .filter(|a| a.is_ipv6())
-        .map(|&a| SocketAddr::new(a, port))
-        .collect();
-    let mut v4: Vec<SocketAddr> = state
-        .addrs
-        .iter()
-        .filter(|a| a.is_ipv4())
-        .map(|&a| SocketAddr::new(a, port))
-        .collect();
-    v6.append(&mut v4);
-    Ok((state, v6))
-}
-
 /// Bind the QUIC client UDP socket matching the remote's family.
 fn bind_quic_socket(remote: &SocketAddr) -> io::Result<UdpSocket> {
     let any: SocketAddr = if remote.is_ipv6() {
@@ -147,12 +126,16 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let dns_sock = bind_dns_socket(cfg.listen, cfg.busy_poll)?;
     log::info!("worker {} listening on {dns_sock:?}", std::process::id());
 
-    let bootstrap = Bootstrap::new(cfg.bootstrap_dns);
-    let (mut resolve_state, mut remotes) = resolve_upstream(
-        &bootstrap,
-        &cfg.upstream.host,
-        cfg.upstream.port,
-    )?;
+    // Read upstream addresses from the supervisor's shared page (read-only).
+    let mut shm = shared::ResolveReader::map_readonly(cfg.shm_fd)?;
+    let mut remotes: Vec<SocketAddr> = shm
+        .read_initial()
+        .iter()
+        .map(|&ip| SocketAddr::new(ip, cfg.upstream.port))
+        .collect();
+    if remotes.is_empty() {
+        return Err("no upstream addresses in shared memory".into());
+    }
     let mut remote_idx = 0usize;
 
     let quic_sock = bind_quic_socket(&remotes[remote_idx])?;
@@ -171,7 +154,6 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut goaway = false;
     let mut reconnect_at: Option<Instant> = None;
     let mut backoff = Duration::ZERO;
-    let mut refresh_due = Instant::now() + Duration::from_secs(3600);
     let mut req_buf: Vec<u8> = Vec::with_capacity(2048);
 
     let mut now = Instant::now();
@@ -194,7 +176,6 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(q) = queue.front() {
             next = Some(next.map_or(q.deadline, |n| n.min(q.deadline)));
         }
-        next = Some(next.map_or(refresh_due, |n| n.min(refresh_due)));
         poller.arm_timer(next)?;
 
         let n = poller.wait(&mut events, cfg.spin)?;
@@ -243,18 +224,16 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
                         &cfg,
                         &dns_sock,
                         &quic_sock,
-                        &bootstrap,
+                        &mut shm,
                         &mut quic,
                         &mut h3,
                         &mut pending,
                         &mut queue,
-                        &mut resolve_state,
                         &mut remotes,
                         &mut remote_idx,
                         &mut goaway,
                         &mut h3_ready,
                         &mut reconnect_at,
-                        &mut refresh_due,
                         now,
                     );
                 }
@@ -601,24 +580,22 @@ fn process_quic_events(
     }
 }
 
-/// Periodic tasks: request expiry, bootstrap refresh, reconnect.
+/// Periodic tasks: request expiry, shm adoption, reconnect.
 #[allow(clippy::too_many_arguments)]
 fn housekeeping(
     cfg: &WorkerConfig,
     dns_sock: &UdpSocket,
     quic_sock: &UdpSocket,
-    bootstrap: &Bootstrap,
+    shm: &mut shared::ResolveReader,
     quic: &mut Quic,
     h3: &mut H3,
     pending: &mut HashMap<u64, Pending>,
     queue: &mut std::collections::VecDeque<QueuedQuery>,
-    resolve_state: &mut ResolveState,
     remotes: &mut Vec<SocketAddr>,
     remote_idx: &mut usize,
     goaway: &mut bool,
     h3_ready: &mut bool,
     reconnect_at: &mut Option<Instant>,
-    refresh_due: &mut Instant,
     now: Instant,
 ) {
     // ── Expire timed-out requests with SERVFAIL ──
@@ -633,34 +610,15 @@ fn housekeeping(
         }
     }
 
-    // ── Bootstrap TTL refresh (stale-while-revalidate) ──
-    if *refresh_due <= now || !resolve_state.is_fresh() {
-        match bootstrap.resolve(&cfg.upstream.host) {
-            Ok(state) => {
-                let mut v6: Vec<SocketAddr> = state
-                    .addrs
-                    .iter()
-                    .filter(|a| a.is_ipv6())
-                    .map(|&a| SocketAddr::new(a, cfg.upstream.port))
-                    .collect();
-                let mut v4: Vec<SocketAddr> = state
-                    .addrs
-                    .iter()
-                    .filter(|a| a.is_ipv4())
-                    .map(|&a| SocketAddr::new(a, cfg.upstream.port))
-                    .collect();
-                v6.append(&mut v4);
-                if !v6.is_empty() {
-                    *remotes = v6;
-                    *remote_idx %= remotes.len();
-                    *refresh_due = state.expires_at;
-                }
-                *resolve_state = state;
-            }
-            Err(e) => {
-                log::warn!("bootstrap refresh failed (keeping stale): {e}");
-                *refresh_due = now + BOOTSTRAP_RETRY;
-            }
+    // ── Adopt upstream addresses refreshed by the supervisor (lock-free) ──
+    if let Some(ips) = shm.read_if_changed() {
+        if !ips.is_empty() {
+            log::info!("adopting refreshed upstream addresses: {ips:?}");
+            *remotes = ips
+                .iter()
+                .map(|&ip| SocketAddr::new(ip, cfg.upstream.port))
+                .collect();
+            *remote_idx %= remotes.len();
         }
     }
 

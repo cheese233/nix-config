@@ -14,6 +14,7 @@ mod huffman_table;
 mod qpack;
 mod qpack_static;
 mod quic;
+mod shared;
 mod url;
 mod worker;
 
@@ -209,6 +210,37 @@ fn main() {
         cores[..n.max(1)].to_vec()
     };
 
+    // ── Create the read-only shared-memory IPC for upstream addresses.
+    // The supervisor is the only writer; children map it PROT_READ.
+    let (shm_fd, mut shm_writer) = match shared::ResolveWriter::create() {
+        Ok(v) => v,
+        Err(e) => {
+            log::error!("shared memory init: {e}");
+            exit(2);
+        }
+    };
+    let shm_fd = std::os::fd::AsRawFd::as_raw_fd(&shm_fd);
+
+    // ── Resolve the upstream ONCE here, before forking. Otherwise every
+    // child would issue identical bootstrap queries at the same instant.
+    // The result is published to shared memory; the supervisor keeps it
+    // fresh on TTL expiry (cold path: no child ever does blocking DNS).
+    let bootstrap = bootstrap::Bootstrap::new(bootstrap_dns);
+    let (resolve_state, remotes) = loop {
+        match bootstrap::resolve_upstream(&bootstrap, &upstream.host, upstream.port) {
+            Ok(r) => break r,
+            Err(e) => {
+                if SHUTDOWN.load(Ordering::SeqCst) {
+                    exit(0);
+                }
+                log::error!("bootstrap resolve of {} failed ({e}), retrying in 2s", upstream.host);
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        }
+    };
+    // Publish IPv6-first (the sorted order children should prefer).
+    let sorted_ips: Vec<IpAddr> = remotes.iter().map(|r| r.ip()).collect();
+    shm_writer.publish(&sorted_ips, resolve_state.expires_at);
     log::info!(
         "microdoh3: {} worker(s) on cpu(s) {:?}, upstream https://{}:{}{}",
         cpus.len(),
@@ -232,36 +264,39 @@ fn main() {
     }
 
     // ── Prefork workers ──
-    // pid → (cpu, started_at, fast_failures)
-    let mut children: HashMap<Pid, (u32, Instant, u32)> = HashMap::new();
-    for &cpu in &cpus {
-        spawn_worker(cpu, &cli, &listen, &upstream, &bootstrap_dns, &token, &mut children);
+    // pid → (cpu, child_idx, started_at, fast_failures)
+    let mut children: HashMap<Pid, (u32, usize, Instant, u32)> = HashMap::new();
+    for (idx, &cpu) in cpus.iter().enumerate() {
+        spawn_worker(cpu, idx, &cli, &listen, &upstream, &token, shm_fd, &mut children);
     }
 
-    // ── Supervise: restart on crash, kill all on shutdown ──
+    // ── Supervise: reap children, keep bootstrap resolution fresh in
+    // shared memory (cold path), shut down cleanly. All blocking DNS work
+    // happens here in the supervisor, never in a child.
+    let mut next_refresh = resolve_state.expires_at;
     loop {
-        match waitpid(None, None) {
-            Ok(WaitStatus::Exited(pid, code)) => {
-                log::warn!("worker {pid} exited with code {code}");
-                handle_child_exit(pid, &cli, &listen, &upstream, &bootstrap_dns, &token, &mut children);
-            }
-            Ok(WaitStatus::Signaled(pid, sig, _)) => {
-                log::warn!("worker {pid} killed by {sig}");
-                handle_child_exit(pid, &cli, &listen, &upstream, &bootstrap_dns, &token, &mut children);
-            }
-            Ok(_) => {}
-            Err(nix::errno::Errno::EINTR) => {}
-            Err(nix::errno::Errno::ECHILD) => {
-                if SHUTDOWN.load(Ordering::SeqCst) || children.is_empty() {
+        // 1. Reap all exited children (non-blocking).
+        loop {
+            match waitpid(None, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
+                Ok(WaitStatus::Exited(pid, code)) => {
+                    log::warn!("worker {pid} exited with code {code}");
+                    handle_child_exit(pid, &cli, &listen, &upstream, &token, shm_fd, &mut children);
+                }
+                Ok(WaitStatus::Signaled(pid, sig, _)) => {
+                    log::warn!("worker {pid} killed by {sig}");
+                    handle_child_exit(pid, &cli, &listen, &upstream, &token, shm_fd, &mut children);
+                }
+                Ok(_) => break,
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(nix::errno::Errno::ECHILD) => break,
+                Err(e) => {
+                    log::error!("waitpid: {e}");
                     break;
                 }
             }
-            Err(e) => {
-                log::error!("waitpid: {e}");
-                break;
-            }
         }
 
+        // 2. Shutdown?
         if SHUTDOWN.load(Ordering::SeqCst) {
             if children.is_empty() {
                 break;
@@ -270,7 +305,6 @@ fn main() {
             for pid in children.keys() {
                 let _ = kill(*pid, Signal::SIGTERM);
             }
-            // Give children a moment, then SIGKILL stragglers.
             std::thread::sleep(Duration::from_millis(500));
             for pid in children.keys() {
                 let _ = kill(*pid, Signal::SIGKILL);
@@ -278,6 +312,28 @@ fn main() {
             children.clear();
             break;
         }
+
+        // 3. Refresh bootstrap resolution when the TTL expires; publish to shm.
+        if Instant::now() >= next_refresh {
+            match bootstrap::resolve_upstream(&bootstrap, &upstream.host, upstream.port) {
+                Ok((state, remotes)) => {
+                    let ips: Vec<IpAddr> = remotes.iter().map(|r| r.ip()).collect();
+                    shm_writer.publish(&ips, state.expires_at);
+                    next_refresh = state.expires_at;
+                }
+                Err(e) => {
+                    log::warn!("bootstrap refresh failed (keeping stale): {e}");
+                    next_refresh = Instant::now() + Duration::from_secs(60);
+                }
+            }
+        }
+
+        // 4. Sleep until the next refresh deadline, at most 1s (signals
+        //    interrupt the sleep; child deaths are reaped within a second).
+        let sleep_dur = next_refresh
+            .saturating_duration_since(Instant::now())
+            .min(Duration::from_secs(1));
+        std::thread::sleep(sleep_dur);
     }
     log::info!("supervisor: exit");
 }
@@ -288,11 +344,11 @@ fn handle_child_exit(
     cli: &Cli,
     listen: &SocketAddr,
     upstream: &url::HttpsUrl,
-    bootstrap_dns: &IpAddr,
     token: &Option<Arc<str>>,
-    children: &mut HashMap<Pid, (u32, Instant, u32)>,
+    shm_fd: std::os::fd::RawFd,
+    children: &mut HashMap<Pid, (u32, usize, Instant, u32)>,
 ) {
-    let Some((cpu, started, fails)) = children.remove(&pid) else {
+    let Some((cpu, idx, started, fails)) = children.remove(&pid) else {
         return;
     };
     if SHUTDOWN.load(Ordering::SeqCst) {
@@ -310,23 +366,24 @@ fn handle_child_exit(
         log::warn!("worker on cpu {cpu} died after {lived:.1?}; restart #{fails} in {delay:.1?}");
         std::thread::sleep(delay);
     }
-    spawn_worker(cpu, cli, listen, upstream, bootstrap_dns, token, children);
+    spawn_worker(cpu, idx, cli, listen, upstream, token, shm_fd, children);
 }
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_worker(
     cpu: u32,
+    child_idx: usize,
     cli: &Cli,
     listen: &SocketAddr,
     upstream: &url::HttpsUrl,
-    bootstrap_dns: &IpAddr,
     token: &Option<Arc<str>>,
-    children: &mut HashMap<Pid, (u32, Instant, u32)>,
+    shm_fd: std::os::fd::RawFd,
+    children: &mut HashMap<Pid, (u32, usize, Instant, u32)>,
 ) {
-    let fails = children.values().find(|(c, _, _)| *c == cpu).map(|(_, _, f)| *f).unwrap_or(0);
+    let fails = children.values().find(|(c, _, _, _)| *c == cpu).map(|(_, _, _, f)| *f).unwrap_or(0);
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
-            children.insert(child, (cpu, Instant::now(), fails));
+            children.insert(child, (cpu, child_idx, Instant::now(), fails));
             log::info!("worker pid {child} on cpu {cpu}");
         }
         Ok(ForkResult::Child) => {
@@ -336,13 +393,14 @@ fn spawn_worker(
             let cfg = WorkerConfig {
                 listen: *listen,
                 upstream: upstream.clone(),
-                bootstrap_dns: *bootstrap_dns,
                 token: token.clone(),
                 timeout: Duration::from_secs(cli.timeout_secs),
                 pad: cli.pad,
                 busy_poll: cli.busy_poll,
                 spin: cli.spin,
                 mlockall: cli.mlockall,
+                shm_fd,
+                child_idx,
             };
             match worker_run(cfg) {
                 Ok(()) => exit(0),

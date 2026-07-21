@@ -26,15 +26,44 @@ pub enum BootstrapError {
 }
 
 /// Cached resolution result with TTL expiry.
+#[derive(Clone)]
 pub struct ResolveState {
     pub addrs: Vec<IpAddr>,
     pub expires_at: Instant,
 }
 
 impl ResolveState {
+    #[allow(dead_code)]
     pub fn is_fresh(&self) -> bool {
         self.expires_at > Instant::now()
     }
+}
+
+/// Resolve `host` via the bootstrap server, returning the TTL-bounded state
+/// plus the upstream socket addresses (IPv6 first — works well with
+/// NAT64/DNS64 networks).
+pub fn resolve_upstream(
+    bootstrap: &Bootstrap,
+    host: &str,
+    port: u16,
+) -> io::Result<(ResolveState, Vec<SocketAddr>)> {
+    let state = bootstrap
+        .resolve(host)
+        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e.to_string()))?;
+    let mut v6: Vec<SocketAddr> = state
+        .addrs
+        .iter()
+        .filter(|a| a.is_ipv6())
+        .map(|&a| SocketAddr::new(a, port))
+        .collect();
+    let mut v4: Vec<SocketAddr> = state
+        .addrs
+        .iter()
+        .filter(|a| a.is_ipv4())
+        .map(|&a| SocketAddr::new(a, port))
+        .collect();
+    v6.append(&mut v4);
+    Ok((state, v6))
 }
 
 /// A minimal synchronous DNS stub resolver pointed at one bootstrap server.
