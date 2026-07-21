@@ -78,6 +78,9 @@ pub fn build_client_config(keep_alive: Duration, idle: Duration) -> Result<proto
     if let Ok(t) = proto::IdleTimeout::try_from(idle) {
         transport.max_idle_timeout(Some(t));
     }
+    // BBRv3 congestion control (model-based pacing; better than CUBIC on
+    // lossy/high-BDP paths to the DoH upstream).
+    transport.congestion_controller_factory(Arc::new(proto::congestion::Bbr3Config::default()));
     cfg.transport_config(Arc::new(transport));
     Ok(cfg)
 }

@@ -8,7 +8,7 @@ rustPlatform.buildRustPackage {
 
   src = lib.cleanSource ./.;
 
-  cargoHash = "sha256-0llRP1lo0GojwwUvqMqwC416XBJsgaxnoh4g1JcUD7Q=";
+  cargoHash = "sha256-ZWpKHrr8RfOGOTuVcWCdT27qD/Ivj2V+LGj/j+yFdWo=";
 
   meta = with lib; {
     description = "Minimal DNS-over-HTTP/3 proxy (Rust, noq QUIC, prefork per-core, 0-RTT, no async runtime)";
