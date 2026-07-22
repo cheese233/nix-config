@@ -5,6 +5,7 @@ let
 
   veth = mkPodmanVeth {
     name   = "vaultwarden";
+    ifName = "bw";
     bridge = "br-lan";
     mac    = "02:00:00:00:00:04";
     mdns   = true;

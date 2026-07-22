@@ -3,13 +3,14 @@
 { name, bridge, mac, raTimeout ? 120
 , mdns ? false
 , hostname ? null  # null = use name as hostname
+, ifName ? name  # override when name is too long for 15-char veth limit
 , mdnsPublisher ? inputs.mdns-publisher.packages.${pkgs.stdenv.hostPlatform.system}.default
 , mdnsTtl ? 120
 }:
 
 let
-  hostIf = "veth-${name}-h";
-  nsIf   = "veth-${name}-c";
+  hostIf = "veth-${ifName}-h";
+  nsIf   = "veth-${ifName}-c";
   mdnsName = if hostname != null then hostname else name;
 in
 {
