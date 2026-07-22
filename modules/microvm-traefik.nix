@@ -160,7 +160,7 @@ in
           };
 
           certificatesResolvers.letsencrypt.acme = {
-            email = "postmaster+traefik@c23.me"; # TODO: replace with your email
+            email = "postmaster+traefik@c23.me";
             storage = "${config.services.traefik.dataDir}/acme.json";
             tlsChallenge = {};
           };
@@ -277,6 +277,11 @@ in
       from = [ "traefik" ];
       to = [ "fw" ];
       allowedUDPPorts = [ 47999 ];
+    };
+    rules.lan-to-traefik = {
+      from = [ "lan" ];
+      to = [ "traefik" ];
+      verdict = "accept";
     };
     # Allow LAN clients to query the Traefik VM's mDNS responder.
     rules.lan-to-traefik-mdns = {
