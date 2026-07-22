@@ -32,6 +32,10 @@
       url = "./pkgs/socks5";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    aria2-next = {
+      url = "./pkgs/aria2-next";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     microvm = {
       url = "github:microvm-nix/microvm.nix";

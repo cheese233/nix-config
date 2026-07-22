@@ -231,11 +231,8 @@ in
       networking.nftables.enable = true;
       networking.firewall = {
         enable = true;
-        allowedTCPPorts = [ 80 443 ];
+        allowedTCPPorts = [ 80 443 8443 ];
         allowedUDPPorts = [ 47999 ];
-        extraInputRules = ''
-          tcp dport 8443 ct mark != 0xd accept
-        '';
       };
 
       services.cloudflare-ddns = {
@@ -294,7 +291,12 @@ in
       from = [ "wan" ];
       to = [ "traefik" ];
       verdict = "accept";
-      extraLines = [ "ct mark set 0xd" ];
+    };
+    rules.wan-to-traefik-ban-dashboard = {
+      ruleType = "ban";
+      from = [ "wan" ];
+      to = [ "traefik" ];
+      extraLines = [ "tcp dport 8443 drop" ];
     };
     # Allow Traefik to forward UDP traffic to host's AmneziaWG
     rules.traefik-to-fw-awg = {
