@@ -23,6 +23,22 @@
         "type": "github"
       }
     },
+    "aria2-next": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./pkgs/aria2-next",
+        "type": "path"
+      },
+      "original": {
+        "path": "./pkgs/aria2-next",
+        "type": "path"
+      },
+      "parent": []
+    },
     "avahi2dns": {
       "inputs": {
         "nixpkgs": [
@@ -389,6 +405,7 @@
     "root": {
       "inputs": {
         "agenix": "agenix",
+        "aria2-next": "aria2-next",
         "avahi2dns": "avahi2dns",
         "dae": "dae",
         "dibbler": "dibbler",
