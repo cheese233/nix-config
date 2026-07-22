@@ -115,6 +115,7 @@ in
 
       # Bring up the first virtio ethernet adapter with a static LAN IPv6 address.
       # IPv6 default routes and DNS come from radvd on the host (IPv6AcceptRA).
+      systemd.network.wait-online.enable = true;
       systemd.network.networks."10-lan" = {
         matchConfig.Name = "eth0";
         networkConfig = {
@@ -122,6 +123,7 @@ in
           IPv6AcceptRA = true;
           IPv6PrivacyExtensions = "no";
           DNS = [ "fdea:d:beef::1" ];
+          RequiredForOnline = "routable";
         };
       };
 
