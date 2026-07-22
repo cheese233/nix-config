@@ -48,6 +48,7 @@ in
       boot.kernelModules = [ "vsock" "vmw_vsock_virtio_transport" ];
 
       services.resolved.enable = false;
+      networking.nameservers = [ "fdea:d:beef::1" ];
 
       # Minimal base: systemd-networkd is enabled via microvm.optimize by default,
       # but we declare it explicitly below.
