@@ -57,8 +57,7 @@
             enableParallelBuilding = true;
 
             postInstall = ''
-              mkdir -p $out/share/bash-completion/completions
-              cp $src/doc/bash_completion/aria2c $out/share/bash-completion/completions/aria2-next 2>/dev/null || true
+              ln -s $out/bin/aria2-next $out/bin/aria2c
             '';
 
             meta = with pkgs.lib; {
@@ -87,18 +86,14 @@
       {
         options.services.aria2-next = {
           enable = lib.mkEnableOption "aria2-next — maintained aria2 fork";
-          package = lib.mkOption {
-            type = lib.types.package;
-            default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-            description = "The aria2-next package to use.";
-          };
         };
 
         config = lib.mkIf cfg.enable {
-          services.aria2.enable = true;
-          systemd.services.aria2.serviceConfig.ExecStart = lib.mkForce (
-            "${cfg.package}/bin/aria2-next --conf-path=${config.services.aria2.settings.conf-path}"
-          );
+          nixpkgs.overlays = [
+            (final: prev: {
+              aria2 = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+            })
+          ];
         };
       };
     };
