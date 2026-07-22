@@ -37,6 +37,7 @@ in
 
       networking.hostName = "traefik";
       system.stateVersion = "26.05";
+      time.timeZone = config.time.timeZone;
 
       # Fixed machine-id so the host can identify this VM's journals.
       microvm.machineId = "70aef1c0-0000-0000-0000-000000000000";
