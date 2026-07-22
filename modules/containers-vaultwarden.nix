@@ -37,7 +37,7 @@ in
 
   virtualisation.oci-containers.containers.vaultwarden = {
     image = "vaultwarden:latest";
-    imageFile = vaultwardenImage;
+    imageStream = vaultwardenImage;
     autoStart = true;
 
     volumes = [

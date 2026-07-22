@@ -54,7 +54,6 @@ in
         "--cap-drop=ALL"
         "--security-opt=no-new-privileges:true"
         "--device=/dev/dri/renderD128:/dev/dri/renderD128"
-        "--device=/dev/dri/card0:/dev/dri/card0"
         "--dns=fdea:d:beef::1"
       ];
     };
