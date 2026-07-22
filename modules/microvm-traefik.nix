@@ -234,6 +234,16 @@ in
         '';
       };
 
+      services.cloudflare-ddns = {
+        enable = true;
+        domains = [ "." ];  # dummy, real domains come from env file
+        credentialsFile = "/var/lib/traefik/cloudflare-ddns.env";
+      };
+      systemd.services.cloudflare-ddns.serviceConfig.Environment = lib.mkForce [];
+      systemd.services.cloudflare-ddns.serviceConfig.EnvironmentFile = lib.mkForce [
+        "/var/lib/traefik/cloudflare-ddns.env"
+      ];
+
     };
   };
 
@@ -243,6 +253,15 @@ in
   age.secrets.traefik-env = {
     file = ../secrets/traefik-env.age;
     path = "/var/lib/microvms/traefik/traefik-data/traefik-env";
+    owner = "root";
+    group = "root";
+    mode = "0640";
+    symlink = false;
+  };
+
+  age.secrets.traefik-ddns-env = {
+    file = ../secrets/traefik-ddns-env.age;
+    path = "/var/lib/microvms/traefik/traefik-data/cloudflare-ddns.env";
     owner = "root";
     group = "root";
     mode = "0640";
