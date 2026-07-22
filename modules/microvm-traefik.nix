@@ -224,6 +224,7 @@ in
       users.users.root.password = "";
       services.getty.autologinUser = "root";
 
+      networking.nftables.enable = true;
       networking.firewall = {
         enable = true;
         allowedTCPPorts = [ 80 443 ];
