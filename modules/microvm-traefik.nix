@@ -118,12 +118,12 @@ in
       systemd.network.wait-online.enable = true;
       systemd.network.networks."10-lan" = {
         matchConfig.Name = "eth0";
+        linkConfig.RequiredForOnline = "routable";
         networkConfig = {
           DHCP = "no";
           IPv6AcceptRA = true;
           IPv6PrivacyExtensions = "no";
           DNS = [ "fdea:d:beef::1" ];
-          RequiredForOnline = "routable";
         };
       };
 
