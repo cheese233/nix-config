@@ -300,6 +300,12 @@ in
       to = [ "fw" ];
       allowedUDPPorts = [ 47999 ];
     };
+    rules.traefik-to-fw-dns = {
+      from = [ "traefik" ];
+      to = [ "fw" ];
+      allowedUDPPorts = [ 53 ];
+      allowedTCPPorts = [ 53 ];
+    };
     rules.lan-to-traefik = {
       from = [ "lan" ];
       to = [ "traefik" ];
