@@ -94,8 +94,9 @@ in
   };
 
   networking.nftables.firewall.rules = {
-    lan-aria2-ariang = {
+    lan-to-fw-ariang = {
       from = [ "lan" ];
+      to = [ "fw" ];
       allowedTCPPorts = [ 8600 ];
     };
     wan-to-lan-aria2-dht = {
