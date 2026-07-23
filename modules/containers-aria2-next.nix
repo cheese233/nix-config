@@ -41,6 +41,7 @@ let
     rpc-listen-all=true
     rpc-listen-port=6800
     rpc-secret=${aria2RpcSecret}
+    rpc-allow-origin-all=true
 
     save-session=/config/aria2.session
     save-session-interval=30
@@ -81,11 +82,11 @@ in
       sub_filter '</head>'
         '<script>
            try {
-             var o = JSON.parse(localStorage.getItem("Options") || "{}");
-             if (!o.rpcHost) o.rpcHost = "aria2.local";
-             if (!o.rpcPort) o.rpcPort = "6800";
-             if (!o.secret)  o.secret  = "${aria2RpcSecretB64}";
-             localStorage.setItem("Options", JSON.stringify(o));
+             var o = JSON.parse(localStorage.getItem("AriaNg.Options") || "{}");
+             o.rpcHost = "aria2.local";
+             o.rpcPort = "6800";
+             o.secret = "${aria2RpcSecretB64}";
+             localStorage.setItem("AriaNg.Options", JSON.stringify(o));
            } catch (e) {}
          </script></head>';
       sub_filter_once on;
