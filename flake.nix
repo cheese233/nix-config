@@ -36,6 +36,10 @@
       url = "./pkgs/aria2-next";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    v2ray-rules-dat = {
+      url = "./pkgs/v2ray-rules-dat";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     microvm = {
       url = "github:microvm-nix/microvm.nix";

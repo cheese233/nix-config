@@ -416,7 +416,8 @@
         "nixpkgs": "nixpkgs_2",
         "nnf": "nnf",
         "secureboot": "secureboot",
-        "socks5": "socks5"
+        "socks5": "socks5",
+        "v2ray-rules-dat": "v2ray-rules-dat"
       }
     },
     "rust-overlay": {
@@ -521,6 +522,22 @@
         "repo": "default",
         "type": "github"
       }
+    },
+    "v2ray-rules-dat": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "path": "./pkgs/v2ray-rules-dat",
+        "type": "path"
+      },
+      "original": {
+        "path": "./pkgs/v2ray-rules-dat",
+        "type": "path"
+      },
+      "parent": []
     }
   },
   "root": "root",

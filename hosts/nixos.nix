@@ -5,6 +5,7 @@
     ../modules/zfs-kernel.nix
     ../modules/containers-jellyfin.nix
     ../modules/containers-vaultwarden.nix
+    ../modules/containers-aria2-next.nix
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
     inputs.dae.nixosModules.dae
@@ -376,6 +377,10 @@
   # ==================== DAE ====================
   services.dae = {
     enable = true;
+    assets = with pkgs; [
+      v2ray-geoip
+      (inputs.v2ray-rules-dat.packages.x86_64-linux.default)
+    ];
     openFirewall = {
       enable = true;
       port = 10800;

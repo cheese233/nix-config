@@ -79,22 +79,12 @@
         }
       );
 
-      nixosModules.default = { config, lib, pkgs, ... }:
-      let
-        cfg = config.services.aria2-next;
-      in
-      {
-        options.services.aria2-next = {
-          enable = lib.mkEnableOption "aria2-next — maintained aria2 fork";
-        };
-
-        config = lib.mkIf cfg.enable {
-          nixpkgs.overlays = [
-            (final: prev: {
-              aria2 = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-            })
-          ];
-        };
+      nixosModules.default = { nixpkgs, ... }: {
+        nixpkgs.overlays = [
+          (final: prev: {
+            aria2 = self.packages.${prev.stdenv.hostPlatform.system}.default;
+          })
+        ];
       };
     };
 }
