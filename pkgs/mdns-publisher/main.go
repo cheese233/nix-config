@@ -30,6 +30,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"slices"
 	"os"
 	"os/signal"
 	"sort"
@@ -253,6 +254,7 @@ func buildNSEC(name string, records []dns.RR, ttl uint32) dns.RR {
 	for t := range typeSet {
 		types = append(types, t)
 	}
+	slices.Sort(types)
 	return &dns.NSEC{
 		Hdr: dns.RR_Header{
 			Name:   name,
