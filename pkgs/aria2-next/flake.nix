@@ -26,6 +26,10 @@
               hash = "sha256-1QcdgU03qTk1yovTYv4udMA6TKKZEWPEXOCtlIdNhZw=";
             };
 
+            patches = [
+              ./private-network-access.patch
+            ];
+
             nativeBuildInputs = with pkgs; [
               cmake
               ninja

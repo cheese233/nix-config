@@ -225,7 +225,7 @@
         access-control = [
           "127.0.0.0/8 allow"
           "::1/128 allow"
-          "fdea:d:beef::/64 allow"
+          "fdea:d:beef::/48 allow"
         ];
         local-data = [
           "\"wpad.local. IN AAAA fdea:d:beef::1\""
@@ -367,6 +367,8 @@
       lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };
       lan-to-awg = { from = [ "lan" ]; to = [ "awg" ]; verdict = "accept"; };
       awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };
+      awg-to-nat64 = { from = [ "awg" ]; to = [ "nat64" ]; verdict = "accept"; };
+      awg-to-wan = { from = [ "awg" ]; to = [ "wan" ]; verdict = "accept"; masquerade = true; };
       awg-to-fw-dns = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       awg-to-fw-icmpv6 = { from = [ "awg" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from AWG\"" ]; };
       awg-to-fw-dhcpv6 = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };

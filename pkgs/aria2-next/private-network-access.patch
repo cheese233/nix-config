@@ -1,0 +1,13 @@
+diff --git a/src/HttpServerBodyCommand.cc b/src/HttpServerBodyCommand.cc
+index 04481b5..fe28d47 100644
+--- a/src/HttpServerBodyCommand.cc
++++ b/src/HttpServerBodyCommand.cc
+@@ -203,6 +203,8 @@ bool HttpServerBodyCommand::execute()
+             accessControlHeaders +=
+                 "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+                 "Access-Control-Max-Age: 1728000\r\n";
++            accessControlHeaders +=
++                "Access-Control-Allow-Private-Network: true\r\n";
+             const std::string& accReqHeaders =
+                 header->find(HttpHeader::ACCESS_CONTROL_REQUEST_HEADERS);
+             if (!accReqHeaders.empty()) {
