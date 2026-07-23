@@ -42,9 +42,9 @@ let
     rpc-listen-port=6800
     rpc-secret=${aria2RpcSecret}
 
-    save-session=/var/lib/aria2/aria2.session
+    save-session=/config/aria2.session
     save-session-interval=30
-    input-file=/var/lib/aria2/aria2.session
+    input-file=/config/aria2.session
 
     seed-ratio=1.0
     seed-time=60
@@ -113,6 +113,7 @@ in
   systemd.tmpfiles.rules = [
     "d /var/lib/aria2/downloads 0775 root root -"
     "d /var/lib/aria2/config    0755 root root -"
+    "f /var/lib/aria2/config/aria2.session 0644 root root -"
   ];
 
   virtualisation.oci-containers.containers.aria2 = {
