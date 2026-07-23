@@ -54,8 +54,7 @@ let
     listen-port=33888
     dht-listen-port=33888
 
-    log-level=notice
-    console-log-level=notice
+    log-level=info
   '';
 
   aria2NextImage = pkgs.dockerTools.streamLayeredImage {
