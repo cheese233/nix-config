@@ -368,12 +368,19 @@
       lan-to-awg = { from = [ "lan" ]; to = [ "awg" ]; verdict = "accept"; };
       awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };
       awg-to-nat64 = { from = [ "awg" ]; to = [ "nat64" ]; verdict = "accept"; };
-      awg-to-wan = { from = [ "awg" ]; to = [ "wan" ]; verdict = "accept"; masquerade = true; };
+      awg-to-wan = { from = [ "awg" ]; to = [ "wan" ]; verdict = "accept"; };
       awg-to-fw-dns = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       awg-to-fw-icmpv6 = { from = [ "awg" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from AWG\"" ]; };
       awg-to-fw-dhcpv6 = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
+  };
+
+  # NNF's masquerade is IPv4-only (hardcoded `meta protocol ip`).
+  # Add IPv6 masquerade for AWG clients whose ULA addresses aren't globally routable.
+  networking.nftables.chains.postrouting.awg-ipv6-masq = {
+    after = [ "generated" ];
+    rules = [ "meta protocol ip6 iifname awg0 oifname ppp0 masquerade" ];
   };
 
   # ==================== DAE ====================
