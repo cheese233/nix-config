@@ -80,6 +80,26 @@ let
     ${pkgs.iproute2}/bin/ip link del clat || true
     ${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 || true
   '';
+
+  # tayga 0.9.6 defaults wkpf-strict=true, which rejects auto-generated
+  # ipv6-addr in the Well-Known Prefix. clatd doesn't set ipv6-addr
+  # explicitly, so tayga auto-maps ipv4-addr (192.0.0.2) into 64:ff9b::/96
+  # and then rejects it. This wrapper injects wkpf-strict=false into the
+  # tayga config before it is parsed.
+  taygaWrapper = pkgs.writeShellScript "tayga-wrapper" ''
+    config_file=""
+    args=("$@")
+    for ((i=0; i<''${#args[@]}; i++)); do
+      if [ "''${args[$i]}" = "--config" ] && [ $((i+1)) -lt ''${#args[@]} ]; then
+        config_file="''${args[$((i+1))]}"
+        break
+      fi
+    done
+    if [ -n "$config_file" ] && [ -f "$config_file" ]; then
+      printf 'wkpf-strict false\n' >> "$config_file"
+    fi
+    exec ${pkgs.tayga}/bin/tayga "$@"
+  '';
 in
 {
   services.clatd = {
@@ -87,7 +107,7 @@ in
     settings = {
       plat-prefix = "64:ff9b::/96";
       cmd-ip     = "${pkgs.iproute2}/bin/ip";
-      cmd-tayga  = "${pkgs.tayga}/bin/tayga";
+      cmd-tayga  = "${taygaWrapper}";
       ctmark     = 0;
       debug      = 1;
     };

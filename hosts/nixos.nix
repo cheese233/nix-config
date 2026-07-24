@@ -440,6 +440,7 @@
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
 
+        domain(suffix: gstatic.com) -> proxy
         domain(full: dash.cloudflare.com) -> resident
         domain(suffix: google.com) -> resident
         domain(geosite: facebook) -> resident
