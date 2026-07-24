@@ -75,6 +75,11 @@ let
       };
     };
   };
+
+  clatdPreStart = pkgs.writeShellScript "clatd-pre-start" ''
+    ${pkgs.iproute2}/bin/ip link del clat || true
+    ${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 || true
+  '';
 in
 {
   services.clatd = {
@@ -145,10 +150,7 @@ in
       requires    = [ "podman-veth-aria2.service" ];
       serviceConfig = {
         NetworkNamespacePath = "/run/netns/aria2";
-        ExecStartPre = [
-          "${pkgs.iproute2}/bin/ip link del clat || true"
-          "${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 || true"
-        ];
+        ExecStartPre = [ "${clatdPreStart}" ];
         # Relax hardening: need to run inside a netns, write to /tmp, and spawn ip/tayga
         CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
         AmbientCapabilities   = [ "CAP_NET_ADMIN" ];
