@@ -146,8 +146,8 @@ in
       serviceConfig = {
         NetworkNamespacePath = "/run/netns/aria2";
         ExecStartPre = [
-          "${pkgs.iproute2}/bin/ip link del clat 2>/dev/null || true"
-          "${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 2>/dev/null || true"
+          "${pkgs.iproute2}/bin/ip link del clat || true"
+          "${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 || true"
         ];
         # Relax hardening: need to run inside a netns, write to /tmp, and spawn ip/tayga
         CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
