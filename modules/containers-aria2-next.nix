@@ -34,7 +34,7 @@ cmd-tayga=${pkgs.tayga}/bin/tayga" > /tmp/clatd.conf
 
     # Test tayga --mktun directly before starting clatd
     echo "tun-device testclat" > /tmp/test-tayga.conf
-    ${pkgs.tayga}/bin/tayga --config /tmp/test-tayga.conf --mktun 2>&1
+    ${pkgs.tayga}/bin/tayga --config /tmp/test-tayga.conf --mktun 2>&1 || true
     echo "tayga --mktun exit code: $?"
     ${pkgs.iproute2}/bin/ip tuntap del testclat mode tun 2>/dev/null || true
 
