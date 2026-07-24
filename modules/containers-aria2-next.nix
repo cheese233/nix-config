@@ -30,8 +30,13 @@ let
     # Write clatd config
     echo "plat-prefix=64:ff9b::/96
 cmd-ip=${pkgs.iproute2}/bin/ip
-cmd-tayga=${pkgs.tayga}/bin/tayga" > /tmp/clatd.conf
+cmd-tayga=${pkgs.tayga}/bin/tayga
+ctmark=0" > /tmp/clatd.conf
 
+    # Clean up any leftover CLAT TUN device from a previous unclean shutdown
+    ${pkgs.iproute2}/bin/ip link del clat 2>/dev/null || true
+
+    # Start clatd (it creates the CLAT TUN device itself via tayga --mktun)
     ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf 2>&1 &
 
     i=0
@@ -184,6 +189,8 @@ in
       "--security-opt=no-new-privileges:true"
       "--device=/dev/net/tun"
       "--dns=fdea:d:beef::1"
+      "--sysctl=net.ipv6.conf.all.forwarding=1"
+      "--sysctl=net.ipv6.conf.all.accept_ra=2"
     ];
   };
 }
