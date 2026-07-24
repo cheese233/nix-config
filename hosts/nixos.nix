@@ -404,6 +404,7 @@
         log_level: info
         allow_insecure: false
         auto_config_kernel_parameter: false
+        dial_mode: domain++
       }
 
       subscription {
