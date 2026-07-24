@@ -27,11 +27,19 @@ let
   aria2Entrypoint = pkgs.writeShellScriptBin "aria2-entrypoint" ''
     set -e
 
+    # Write clatd config
     echo "plat-prefix=64:ff9b::/96
-cmd-ip=${pkgs.iproute2}/sbin/ip
+cmd-ip=${pkgs.iproute2}/bin/ip
 cmd-tayga=${pkgs.tayga}/bin/tayga" > /tmp/clatd.conf
 
-    ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf &
+    # Test tayga --mktun directly before starting clatd
+    echo "tun-device testclat" > /tmp/test-tayga.conf
+    ${pkgs.tayga}/bin/tayga --config /tmp/test-tayga.conf --mktun 2>&1
+    echo "tayga --mktun exit code: $?"
+    ${pkgs.iproute2}/bin/ip tuntap del testclat mode tun 2>/dev/null || true
+
+    # Start clatd
+    ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf 2>&1 &
 
     i=0
     while [ $i -lt 30 ]; do
@@ -174,6 +182,7 @@ in
       "--tmpfs=/tmp"
       "--cap-drop=ALL"
       "--cap-add=NET_ADMIN"
+      "--cap-add=MKNOD"
       "--security-opt=no-new-privileges:true"
       "--device=/dev/net/tun"
       "--dns=fdea:d:beef::1"
