@@ -27,7 +27,8 @@ let
   aria2Entrypoint = pkgs.writeShellScriptBin "aria2-entrypoint" ''
     set -e
 
-    echo "plat-prefix=64:ff9b::/96" > /tmp/clatd.conf
+    echo "plat-prefix=64:ff9b::/96
+no-tayga=true" > /tmp/clatd.conf
 
     ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf &
 
