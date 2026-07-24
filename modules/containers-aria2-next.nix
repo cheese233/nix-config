@@ -24,6 +24,28 @@ let
     printf '%s' ${lib.escapeShellArg aria2RpcSecret} | ${pkgs.coreutils}/bin/base64 -w0 > $out
   '');
 
+  aria2Entrypoint = pkgs.writeShellScript "aria2-entrypoint" ''
+    set -e
+
+    # Write clatd config
+    cat > /tmp/clatd.conf << EOF
+    plat-prefix=64:ff9b::/96
+    EOF
+
+    # Start clatd in background
+    ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf &
+    clatd_pid=$!
+
+    # Wait for clat interface to appear
+    for i in $(seq 1 30); do
+      ip addr show clat 2>/dev/null && break
+      sleep 1
+    done
+
+    # Start aria2, replacing shell
+    exec ${aria2NextPkg}/bin/aria2-next --conf-path=/config/aria2.conf
+  '';
+
   aria2Conf = pkgs.writeText "aria2.conf" ''
     dir=/downloads
     continue=true
@@ -61,9 +83,9 @@ let
   aria2NextImage = pkgs.dockerTools.streamLayeredImage {
     name = "aria2-next";
     tag  = "latest";
-    contents = [ aria2NextPkg ];
+    contents = [ aria2NextPkg pkgs.clatd aria2Entrypoint ];
     config = {
-      Cmd = [ "${aria2NextPkg}/bin/aria2-next" "--conf-path=/config/aria2.conf" ];
+      Cmd = [ "${aria2Entrypoint}" ];
       Volumes = {
         "/downloads" = { };
         "/config" = { };
@@ -114,6 +136,14 @@ in
       allowedTCPPorts = [ 33888 ];
       allowedUDPPorts = [ 33888 ];
     };
+    wan-to-nat64-aria2-dht-ipv4 = {
+      from = [ "wan" ];
+      to = [ "nat64" ];
+      extraLines = [
+        "meta protocol ip tcp dport 33888 accept comment \"Allow aria2 DHT (IPv4)\""
+        "meta protocol ip udp dport 33888 accept comment \"Allow aria2 DHT (IPv4)\""
+      ];
+    };
   };
 
   systemd.services = veth.services // {
@@ -146,6 +176,7 @@ in
       "--hostname=aria2"
       "--tmpfs=/tmp"
       "--cap-drop=ALL"
+      "--cap-add=NET_ADMIN"
       "--security-opt=no-new-privileges:true"
       "--dns=fdea:d:beef::1"
     ];
