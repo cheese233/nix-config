@@ -82,12 +82,20 @@ in
       sub_filter '</head>'
         '<script>
            try {
-             var o = JSON.parse(localStorage.getItem("AriaNg.Options") || "{}");
-             o.rpcHost = "aria2.local";
-             o.rpcPort = "6800";
-             o.secret = "${aria2RpcSecretB64}";
-             localStorage.setItem("AriaNg.Options", JSON.stringify(o));
-           } catch (e) {}
+             var _orig = localStorage.setItem;
+             localStorage.setItem = function(k,v) {
+               if (k === "AriaNg.Options") {
+                 try {
+                   var o = JSON.parse(v);
+                   o.rpcHost = "aria2.local";
+                   o.rpcPort = "6800";
+                   o.secret = "${aria2RpcSecretB64}";
+                   v = JSON.stringify(o);
+                 } catch(e) {}
+               }
+               _orig.call(localStorage, k, v);
+             };
+           } catch(e) {}
          </script></head>';
       sub_filter_once on;
       sub_filter_types text/html;
