@@ -32,13 +32,6 @@ let
 cmd-ip=${pkgs.iproute2}/bin/ip
 cmd-tayga=${pkgs.tayga}/bin/tayga" > /tmp/clatd.conf
 
-    # Test tayga --mktun directly before starting clatd
-    echo "tun-device testclat" > /tmp/test-tayga.conf
-    ${pkgs.tayga}/bin/tayga --config /tmp/test-tayga.conf --mktun 2>&1 || true
-    echo "tayga --mktun exit code: $?"
-    ${pkgs.iproute2}/bin/ip tuntap del testclat mode tun 2>/dev/null || true
-
-    # Start clatd
     ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf 2>&1 &
 
     i=0
@@ -47,6 +40,11 @@ cmd-tayga=${pkgs.tayga}/bin/tayga" > /tmp/clatd.conf
       i=$((i + 1))
       ${pkgs.coreutils}/bin/sleep 1
     done
+
+    if [ ! -d /sys/class/net/clat ]; then
+      echo "ERROR: CLAT interface did not appear within 30s" >&2
+      exit 1
+    fi
 
     exec ${aria2NextPkg}/bin/aria2-next --conf-path=/config/aria2.conf
   '';
