@@ -31,7 +31,8 @@ let
     echo "plat-prefix=64:ff9b::/96
 cmd-ip=${pkgs.iproute2}/bin/ip
 cmd-tayga=${pkgs.tayga}/bin/tayga
-ctmark=0" > /tmp/clatd.conf
+ctmark=0
+debug=1" > /tmp/clatd.conf
 
     # Clean up any leftover CLAT TUN device from a previous unclean shutdown
     ${pkgs.iproute2}/bin/ip link del clat 2>/dev/null || true
