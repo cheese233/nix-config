@@ -24,7 +24,7 @@ let
     printf '%s' ${lib.escapeShellArg aria2RpcSecret} | ${pkgs.coreutils}/bin/base64 -w0 > $out
   '');
 
-  aria2Entrypoint = pkgs.writeShellScript "aria2-entrypoint" ''
+  aria2Entrypoint = pkgs.writeShellScriptBin "aria2-entrypoint" ''
     set -e
 
     # Write clatd config
@@ -34,7 +34,6 @@ let
 
     # Start clatd in background
     ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf &
-    clatd_pid=$!
 
     # Wait for clat interface to appear
     for i in $(seq 1 30); do
@@ -85,7 +84,7 @@ let
     tag  = "latest";
     contents = [ aria2NextPkg pkgs.clatd aria2Entrypoint ];
     config = {
-      Cmd = [ "${aria2Entrypoint}" ];
+      Cmd = [ "${aria2Entrypoint}/bin/aria2-entrypoint" ];
       Volumes = {
         "/downloads" = { };
         "/config" = { };
