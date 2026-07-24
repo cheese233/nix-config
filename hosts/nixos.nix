@@ -386,6 +386,7 @@
   # ==================== DAE ====================
   services.dae = {
     enable = true;
+    package = inputs.dae.packages.x86_64-linux.dae-unstable;
     assets = with pkgs; [
       v2ray-geoip
       (inputs.v2ray-rules-dat.packages.x86_64-linux.default)
