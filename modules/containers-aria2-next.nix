@@ -28,7 +28,8 @@ let
     set -e
 
     echo "plat-prefix=64:ff9b::/96
-no-tayga=true" > /tmp/clatd.conf
+cmd-ip=${pkgs.iproute2}/sbin/ip
+cmd-tayga=${pkgs.tayga}/bin/tayga" > /tmp/clatd.conf
 
     ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf &
 
@@ -79,7 +80,7 @@ no-tayga=true" > /tmp/clatd.conf
   aria2NextImage = pkgs.dockerTools.streamLayeredImage {
     name = "aria2-next";
     tag  = "latest";
-    contents = [ aria2NextPkg pkgs.clatd aria2Entrypoint pkgs.bash pkgs.coreutils ];
+    contents = [ aria2NextPkg pkgs.clatd aria2Entrypoint pkgs.bash pkgs.coreutils pkgs.tayga pkgs.iproute2 ];
     config = {
       Cmd = [ "${aria2Entrypoint}/bin/aria2-entrypoint" ];
       Volumes = {
@@ -174,6 +175,7 @@ in
       "--cap-drop=ALL"
       "--cap-add=NET_ADMIN"
       "--security-opt=no-new-privileges:true"
+      "--device=/dev/net/tun"
       "--dns=fdea:d:beef::1"
     ];
   };
