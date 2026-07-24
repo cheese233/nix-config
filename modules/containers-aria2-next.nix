@@ -27,21 +27,17 @@ let
   aria2Entrypoint = pkgs.writeShellScriptBin "aria2-entrypoint" ''
     set -e
 
-    # Write clatd config
-    cat > /tmp/clatd.conf << EOF
-    plat-prefix=64:ff9b::/96
-    EOF
+    echo "plat-prefix=64:ff9b::/96" > /tmp/clatd.conf
 
-    # Start clatd in background
     ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf &
 
-    # Wait for clat interface to appear
-    for i in $(seq 1 30); do
-      ip addr show clat 2>/dev/null && break
-      sleep 1
+    i=0
+    while [ $i -lt 30 ]; do
+      [ -d /sys/class/net/clat ] && break
+      i=$((i + 1))
+      ${pkgs.coreutils}/bin/sleep 1
     done
 
-    # Start aria2, replacing shell
     exec ${aria2NextPkg}/bin/aria2-next --conf-path=/config/aria2.conf
   '';
 
@@ -82,7 +78,7 @@ let
   aria2NextImage = pkgs.dockerTools.streamLayeredImage {
     name = "aria2-next";
     tag  = "latest";
-    contents = [ aria2NextPkg pkgs.clatd aria2Entrypoint ];
+    contents = [ aria2NextPkg pkgs.clatd aria2Entrypoint pkgs.bash pkgs.coreutils ];
     config = {
       Cmd = [ "${aria2Entrypoint}/bin/aria2-entrypoint" ];
       Volumes = {
