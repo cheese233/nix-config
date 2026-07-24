@@ -25,36 +25,6 @@ let
   '');
 
   aria2Entrypoint = pkgs.writeShellScriptBin "aria2-entrypoint" ''
-    set -e
-
-    # Write clatd config
-    echo "plat-prefix=64:ff9b::/96
-cmd-ip=${pkgs.iproute2}/bin/ip
-cmd-tayga=${pkgs.tayga}/bin/tayga
-ctmark=0
-debug=1" > /tmp/clatd.conf
-
-    # Clean up any leftover CLAT TUN device from a previous unclean shutdown
-    ${pkgs.iproute2}/bin/ip link del clat 2>/dev/null || true
-
-    # Add route to NAT64 prefix via the host gateway (not advertised by radvd)
-    ${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 2>/dev/null || true
-
-    # Start clatd (it creates the CLAT TUN device itself via tayga --mktun)
-    ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf 2>&1 &
-
-    i=0
-    while [ $i -lt 30 ]; do
-      [ -d /sys/class/net/clat ] && break
-      i=$((i + 1))
-      ${pkgs.coreutils}/bin/sleep 1
-    done
-
-    if [ ! -d /sys/class/net/clat ]; then
-      echo "ERROR: CLAT interface did not appear within 30s" >&2
-      exit 1
-    fi
-
     exec ${aria2NextPkg}/bin/aria2-next --conf-path=/config/aria2.conf
   '';
 
@@ -95,7 +65,7 @@ debug=1" > /tmp/clatd.conf
   aria2NextImage = pkgs.dockerTools.streamLayeredImage {
     name = "aria2-next";
     tag  = "latest";
-    contents = [ aria2NextPkg pkgs.clatd aria2Entrypoint pkgs.bash pkgs.coreutils pkgs.tayga pkgs.iproute2 ];
+    contents = [ aria2NextPkg aria2Entrypoint pkgs.bash pkgs.coreutils ];
     config = {
       Cmd = [ "${aria2Entrypoint}/bin/aria2-entrypoint" ];
       Volumes = {
@@ -107,6 +77,17 @@ debug=1" > /tmp/clatd.conf
   };
 in
 {
+  services.clatd = {
+    enable = true;
+    settings = {
+      plat-prefix = "64:ff9b::/96";
+      cmd-ip     = "${pkgs.iproute2}/bin/ip";
+      cmd-tayga  = "${pkgs.tayga}/bin/tayga";
+      ctmark     = 0;
+      debug      = 1;
+    };
+  };
+
   services.nginx.virtualHosts."ariang" = {
     onlySSL = lib.mkForce false;
     addSSL = lib.mkForce false;
@@ -159,6 +140,23 @@ in
   };
 
   systemd.services = veth.services // {
+    clatd = {
+      after       = [ "podman-veth-aria2.service" ];
+      requires    = [ "podman-veth-aria2.service" ];
+      serviceConfig = {
+        NetworkNamespacePath = "/run/netns/aria2";
+        ExecStartPre = [
+          "${pkgs.iproute2}/bin/ip link del clat 2>/dev/null || true"
+          "${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 2>/dev/null || true"
+        ];
+        # Relax hardening: need to run inside a netns, write to /tmp, and spawn ip/tayga
+        CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
+        AmbientCapabilities   = [ "CAP_NET_ADMIN" ];
+        RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_NETLINK" "AF_UNIX" ];
+        RestrictNamespaces   = lib.mkForce false;
+        NoNewPrivileges      = lib.mkForce false;
+      };
+    };
     "${config.virtualisation.oci-containers.containers.aria2.serviceName}" = {
       serviceConfig.StateDirectory = "aria2";
       after = [ "podman-veth-aria2.service" ];
@@ -191,7 +189,6 @@ in
       "--cap-add=NET_ADMIN"
       "--cap-add=MKNOD"
       "--security-opt=no-new-privileges:true"
-      "--device=/dev/net/tun"
       "--dns=fdea:d:beef::1"
       "--sysctl=net.ipv6.conf.all.forwarding=1"
       "--sysctl=net.ipv6.conf.all.accept_ra=2"
