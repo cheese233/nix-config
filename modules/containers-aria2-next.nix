@@ -36,6 +36,9 @@ ctmark=0" > /tmp/clatd.conf
     # Clean up any leftover CLAT TUN device from a previous unclean shutdown
     ${pkgs.iproute2}/bin/ip link del clat 2>/dev/null || true
 
+    # Add route to NAT64 prefix via the host gateway (not advertised by radvd)
+    ${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 2>/dev/null || true
+
     # Start clatd (it creates the CLAT TUN device itself via tayga --mktun)
     ${pkgs.clatd}/bin/clatd -c /tmp/clatd.conf 2>&1 &
 
@@ -191,6 +194,7 @@ in
       "--dns=fdea:d:beef::1"
       "--sysctl=net.ipv6.conf.all.forwarding=1"
       "--sysctl=net.ipv6.conf.all.accept_ra=2"
+      "--sysctl=net.ipv6.conf.eth0.accept_ra=2"
     ];
   };
 }
