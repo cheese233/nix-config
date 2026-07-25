@@ -254,6 +254,7 @@
     address = "127.0.0.1";
     port = 5354;
     domain = "local";
+    v6Only = true;
   };
 
   # ==================== DNS-over-HTTP/3 client (microdoh3) ====================
@@ -299,7 +300,7 @@
     enable = true;
     nssmdns4 = true;
     nssmdns6 = true;
-    allowInterfaces = [ "br-lan" "enp2s0" ];
+    allowInterfaces = [ "br-lan" ];
     publish = {
       enable = true;
       addresses = true;

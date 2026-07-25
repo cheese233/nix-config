@@ -78,6 +78,8 @@
               default = "local";
               description = "TLD to bridge to Avahi (only queries below this name are forwarded).";
             };
+
+            v6Only = lib.mkEnableOption "only resolve AAAA records";
           };
 
           config = lib.mkIf cfg.enable {
@@ -87,12 +89,12 @@
               requires = [ "avahi-daemon.service" ];
               wantedBy = [ "multi-user.target" ];
               serviceConfig = {
-                ExecStart = lib.escapeShellArgs [
+                ExecStart = lib.escapeShellArgs ([
                   "${cfg.package}/bin/avahi2dns"
                   "-a" cfg.address
                   "-p" (toString cfg.port)
                   "-d" cfg.domain
-                ];
+                ] ++ lib.optionals cfg.v6Only [ "-6" ]);
                 Restart = "always";
                 DynamicUser = true;
                 AmbientCapabilities = [ "CAP_NET_BIND_SERVICE" ];
