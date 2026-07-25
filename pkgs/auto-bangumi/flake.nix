@@ -115,8 +115,7 @@
               #!${stdenv.shell}
               export PYTHONPATH="${auto-bangumi-env}/lib/python3.13/site-packages:$out/lib:\$PYTHONPATH"
               export PATH="${auto-bangumi-env}/bin:\$PATH"
-              cd "$out/lib"
-              exec python main.py "\$@"
+              exec python "$out/lib/main.py" "\$@"
               WRAPPER
               chmod +x $out/bin/auto-bangumi
             '';

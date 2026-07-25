@@ -13,12 +13,19 @@ let
 
   abPkg = inputs.auto-bangumi.packages.${pkgs.stdenv.hostPlatform.system}.default;
 
+  abEntrypoint = pkgs.writeShellScriptBin "auto-bangumi-entrypoint" ''
+    set -e
+    ln -sf ${abPkg}/lib/dist /data/dist
+    cd /data
+    exec ${abPkg}/bin/auto-bangumi "$@"
+  '';
+
   abImage = pkgs.dockerTools.streamLayeredImage {
     name = "auto-bangumi";
     tag  = "latest";
-    contents = [ abPkg pkgs.bash pkgs.coreutils pkgs.cacert ];
+    contents = [ abPkg abEntrypoint pkgs.bash pkgs.coreutils pkgs.cacert ];
     config = {
-      Cmd = [ "auto-bangumi" ];
+      Cmd = [ "${abEntrypoint}/bin/auto-bangumi-entrypoint" ];
       Env = [
         "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
       ];
