@@ -18,7 +18,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, pyproject-nix, uv2nix, pnpm2nix-nzbr }:
+  outputs = { self, nixpkgs, pyproject-nix, uv2nix, pnpm2nix-nzbr, ... }:
     let
       supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
