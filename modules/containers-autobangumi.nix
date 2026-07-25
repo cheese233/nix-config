@@ -51,7 +51,7 @@ in
 
     environment = {
       HOME = "/data";
-      HOST = "0.0.0.0";
+      HOST = "::";
       PORT = "7892";
     };
 
