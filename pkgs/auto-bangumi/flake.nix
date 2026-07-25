@@ -101,6 +101,7 @@
               cat > $out/lib/module/__version__.py << EOF
               __version__ = "${version}"
               __version_tuple__ = (${lib.concatStringsSep ", " (lib.splitVersion version)})
+              VERSION = __version__
               EOF
 
               # Write IMAGE_VERSION
