@@ -299,6 +299,7 @@
     enable = true;
     nssmdns4 = true;
     nssmdns6 = true;
+    allowInterfaces = [ "br-lan" "enp2s0" ];
     publish = {
       enable = true;
       addresses = true;
