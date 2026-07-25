@@ -5,7 +5,7 @@ let
 
   veth = mkPodmanVeth {
     name   = "autobangumi";
-    ifName = "autobangumi";
+    ifName = "ab";
     bridge = "br-lan";
     mac    = "02:00:00:00:00:06";
     mdns   = true;
