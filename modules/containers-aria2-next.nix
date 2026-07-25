@@ -9,6 +9,9 @@
 let
   mkPodmanVeth = import ../modules/podman-veth.nix { inherit pkgs lib inputs; };
 
+  aria2IPv4 = "192.168.24.2";
+  lanIPv4   = "192.168.24.1";
+
   veth = mkPodmanVeth {
     name   = "aria2";
     bridge = "br-lan";
@@ -65,7 +68,7 @@ let
   aria2NextImage = pkgs.dockerTools.streamLayeredImage {
     name = "aria2-next";
     tag  = "latest";
-    contents = [ aria2NextPkg aria2Entrypoint pkgs.bash pkgs.coreutils ];
+    contents = [ aria2NextPkg aria2Entrypoint pkgs.bash pkgs.coreutils pkgs.cacert ];
     config = {
       Cmd = [ "${aria2Entrypoint}/bin/aria2-entrypoint" ];
       Volumes = {
@@ -76,43 +79,27 @@ let
     };
   };
 
-  clatdPreStart = pkgs.writeShellScript "clatd-pre-start" ''
-    ${pkgs.iproute2}/bin/ip link del clat || true
-    ${pkgs.iproute2}/bin/ip -6 route add 64:ff9b::/96 via fdea:d:beef::1 || true
+  ip = "${pkgs.iproute2}/bin/ip";
+
+  # Create veth pair, attach host side to br-aria2, move peer into netns + assign IPv4.
+  aria2IPv4Setup = pkgs.writeShellScript "aria2-ipv4-setup" ''
+    set -e
+    ${ip} link del veth-aria2-4-h 2>/dev/null || true
+    ${ip} link add veth-aria2-4-h type veth peer name veth-aria2-4-c
+    ${ip} link set veth-aria2-4-h master br-aria2
+    ${ip} link set veth-aria2-4-h up
+    ${ip} link set veth-aria2-4-c netns aria2
+    ${ip} netns exec aria2 ip link set veth-aria2-4-c name eth1
+    ${ip} netns exec aria2 ip link set eth1 up
+    ${ip} netns exec aria2 ip addr add ${aria2IPv4}/24 dev eth1
+    ${ip} netns exec aria2 ip route add default via ${lanIPv4}
   '';
 
-  # tayga 0.9.6 defaults wkpf-strict=true, which rejects auto-generated
-  # ipv6-addr in the Well-Known Prefix. clatd doesn't set ipv6-addr
-  # explicitly, so tayga auto-maps ipv4-addr (192.0.0.2) into 64:ff9b::/96
-  # and then rejects it. This wrapper injects wkpf-strict=false into the
-  # tayga config before it is parsed.
-  taygaWrapper = pkgs.writeShellScript "tayga-wrapper" ''
-    config_file=""
-    args=("$@")
-    for ((i=0; i<''${#args[@]}; i++)); do
-      if [ "''${args[$i]}" = "--config" ] && [ $((i+1)) -lt ''${#args[@]} ]; then
-        config_file="''${args[$((i+1))]}"
-        break
-      fi
-    done
-    if [ -n "$config_file" ] && [ -f "$config_file" ]; then
-      printf 'wkpf-strict false\n' >> "$config_file"
-    fi
-    exec ${pkgs.tayga}/bin/tayga "$@"
+  aria2IPv4Teardown = pkgs.writeShellScript "aria2-ipv4-teardown" ''
+    ${ip} link del veth-aria2-4-h 2>/dev/null || true
   '';
 in
 {
-  services.clatd = {
-    enable = true;
-    settings = {
-      plat-prefix = "64:ff9b::/96";
-      cmd-ip     = "${pkgs.iproute2}/bin/ip";
-      cmd-tayga  = "${taygaWrapper}";
-      ctmark     = 0;
-      debug      = 1;
-    };
-  };
-
   services.nginx.virtualHosts."ariang" = {
     onlySSL = lib.mkForce false;
     addSSL = lib.mkForce false;
@@ -154,34 +141,46 @@ in
       allowedTCPPorts = [ 33888 ];
       allowedUDPPorts = [ 33888 ];
     };
-    wan-to-nat64-aria2-dht-ipv4 = {
-      from = [ "wan" ];
-      to = [ "nat64" ];
-      extraLines = [
-        "meta protocol ip tcp dport 33888 accept comment \"Allow aria2 DHT (IPv4)\""
-        "meta protocol ip udp dport 33888 accept comment \"Allow aria2 DHT (IPv4)\""
-      ];
-    };
   };
 
+  networking.nftables.firewall.zones.lan.interfaces = [ "br-aria2" ];
+
+  networking.nftables.chains.postrouting.aria2-masq = {
+    after = [ "generated" ];
+    rules = [
+      "ip saddr ${aria2IPv4} oifname \"ppp0\" masquerade"
+    ];
+  };
+
+  networking.nftables.chains.prerouting.aria2-dnat = {
+    after = [ "generated" ];
+    rules = [
+      "meta l4proto { tcp, udp } th dport 33888 dnat ip to ${aria2IPv4} comment \"Forward BT to aria2\""
+    ];
+  };
+
+  networking.bridges.br-aria2 = {};
+  networking.interfaces.br-aria2.ipv4.addresses = [
+    { address = lanIPv4; prefixLength = 24; }
+  ];
+
   systemd.services = veth.services // {
-    clatd = {
+    aria2-ipv4 = {
+      description = "Move veth into aria2 netns + assign IPv4";
       after       = [ "podman-veth-aria2.service" ];
       requires    = [ "podman-veth-aria2.service" ];
+      wantedBy    = [ "multi-user.target" ];
+      path = [ pkgs.iproute2 ];
       serviceConfig = {
-        NetworkNamespacePath = "/run/netns/aria2";
-        ExecStartPre = [ "${clatdPreStart}" ];
-        # Relax hardening: need to run inside a netns, write to /tmp, and spawn ip/tayga
-        CapabilityBoundingSet = [ "CAP_NET_ADMIN" ];
-        AmbientCapabilities   = [ "CAP_NET_ADMIN" ];
-        RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_NETLINK" "AF_UNIX" ];
-        RestrictNamespaces   = lib.mkForce false;
-        NoNewPrivileges      = lib.mkForce false;
+        Type            = "oneshot";
+        RemainAfterExit = true;
+        ExecStart       = "${aria2IPv4Setup}";
+        ExecStop        = "${aria2IPv4Teardown}";
       };
     };
     "${config.virtualisation.oci-containers.containers.aria2.serviceName}" = {
       serviceConfig.StateDirectory = "aria2";
-      after = [ "podman-veth-aria2.service" ];
+      after = [ "podman-veth-aria2.service" "aria2-ipv4.service" ];
       requires = [ "podman-veth-aria2.service" ];
     };
   };
@@ -202,6 +201,10 @@ in
       "/var/lib/aria2/config:/config"
       "${aria2Conf}:/config/aria2.conf"
     ];
+
+    environment = {
+      SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+    };
 
     extraOptions = [
       "--network=${veth.arg}"
