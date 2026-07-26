@@ -311,7 +311,46 @@
       addresses = true;
       domain = true;
       workstation = true;
+      userServices = true;
     };
+  };
+
+  # ==================== Samba ====================
+  services.samba = {
+    enable = true;
+    package = pkgs.samba4Full;
+    openFirewall = false;
+    settings = {
+      global = {
+        "workgroup" = "WORKGROUP";
+        "server string" = "nixos";
+        "netbios name" = "NIXOS";
+        "security" = "user";
+        "hosts allow" = "fdea:d:beef::/48 127.0.0.1 localhost";
+        "hosts deny" = "0.0.0.0/0";
+        "guest account" = "nobody";
+        "map to guest" = "never";
+        "unix password sync" = "yes";
+        "pam password change" = "yes";
+      };
+      "HDD" = {
+        "path" = "/mnt/HDD";
+        "browseable" = "yes";
+        "read only" = "no";
+        "guest ok" = "no";
+        "create mask" = "0644";
+        "directory mask" = "0755";
+        "valid users" = "root";
+        "force user" = "root";
+        "force group" = "root";
+      };
+    };
+  };
+
+  services.samba-wsdd = {
+    enable = true;
+    openFirewall = false;
+    discovery = true;
   };
 
   # ==================== NAT64 ====================
@@ -372,6 +411,8 @@
       lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
       lan-to-fw-cockpit = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = [ 9090 ]; };
       lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };
+      lan-to-fw-samba = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = [ 139 445 ]; allowedUDPPorts = [ 137 138 ]; };
+      lan-to-fw-wsdd = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 3702 ]; };
       lan-to-awg = { from = [ "lan" ]; to = [ "awg" ]; verdict = "accept"; };
       awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };
       awg-to-nat64 = { from = [ "awg" ]; to = [ "nat64" ]; verdict = "accept"; };
