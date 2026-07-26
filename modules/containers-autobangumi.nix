@@ -15,7 +15,8 @@ let
 
   abEntrypoint = pkgs.writeShellScriptBin "auto-bangumi-entrypoint" ''
     set -e
-    ln -sf ${abPkg}/lib/dist /data/dist
+    rm -rf /data/dist
+    ln -s ${abPkg}/lib/dist /data/dist
     cd /data
     exec ${abPkg}/bin/auto-bangumi "$@"
   '';
