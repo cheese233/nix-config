@@ -19,6 +19,10 @@
     ../modules/cockpit.nix
   ];
 
+  environment.systemPackages = with pkgs; [
+    rsync
+  ];
+
   networking.hostName = "nixos";
   networking.nameservers = [ "::1" "127.0.0.1" ];
 
