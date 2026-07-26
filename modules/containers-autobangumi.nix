@@ -55,6 +55,7 @@ in
 
     volumes = [
       "/var/lib/auto-bangumi/data:/data"
+      "/var/lib/aria2/downloads:/downloads"
     ];
 
     environment = {
