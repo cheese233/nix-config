@@ -14,7 +14,7 @@ let
   vaultwardenImage = pkgs.dockerTools.streamLayeredImage {
     name = "vaultwarden";
     tag  = "latest";
-    contents = [ pkgs.vaultwarden ];
+    contents = [ pkgs.vaultwarden pkgs.vaultwarden-webvault ];
     config = {
       Cmd = [ "vaultwarden" ];
       ExposedPorts = { "8222/tcp" = { }; };
@@ -49,6 +49,7 @@ in
       ROCKET_PORT = "8222";
       ROCKET_LOG = "critical";
       SIGNUPS_ALLOWED = "false";
+      WEB_VAULT_FOLDER = "/share/vaultwarden/vault";
     };
 
     extraOptions = [
