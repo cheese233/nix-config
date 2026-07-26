@@ -445,7 +445,7 @@
 
         domain(suffix: gstatic.com) -> proxy
         domain(full: dash.cloudflare.com) -> resident
-        domain(full: google.com) -> resident
+        domain(full: google.com, full: www.google.com) -> resident
         domain(geosite: facebook) -> resident
         domain(geosite: openai, geosite: anthropic, geosite: xai, geosite: google-gemini) -> resident
 
