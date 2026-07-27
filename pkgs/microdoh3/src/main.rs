@@ -274,6 +274,11 @@ fn main() {
     // shared memory (cold path), shut down cleanly. All blocking DNS work
     // happens here in the supervisor, never in a child.
     let mut next_refresh = resolve_state.expires_at;
+    /// Delay before retrying a failed bootstrap refresh.
+    const RETRY_INTERVAL: Duration = Duration::from_secs(60);
+    let bootstrap_server = SocketAddr::new(bootstrap_dns, 53);
+    let mut pending: Option<bootstrap::AsyncResolve> = None;
+    let mut readable = false;
     loop {
         // 1. Reap all exited children (non-blocking).
         loop {
@@ -313,27 +318,76 @@ fn main() {
             break;
         }
 
-        // 3. Refresh bootstrap resolution when the TTL expires; publish to shm.
-        if Instant::now() >= next_refresh {
-            match bootstrap::resolve_upstream(&bootstrap, &upstream.host, upstream.port) {
-                Ok((state, remotes)) => {
-                    let ips: Vec<IpAddr> = remotes.iter().map(|r| r.ip()).collect();
-                    shm_writer.publish(&ips, state.expires_at);
-                    next_refresh = state.expires_at;
-                }
+        // 3. Drive the non-blocking bootstrap refresh (never blocks the
+        //    supervisor: reaping stays ≤1s even if the resolver is down).
+        let now = Instant::now();
+        if pending.is_none() && now >= next_refresh {
+            match bootstrap::AsyncResolve::start(bootstrap_server, &upstream.host, now) {
+                Ok(r) => pending = Some(r),
                 Err(e) => {
-                    log::warn!("bootstrap refresh failed (keeping stale): {e}");
-                    next_refresh = Instant::now() + Duration::from_secs(60);
+                    log::warn!("bootstrap refresh start failed: {e}");
+                    next_refresh = now + RETRY_INTERVAL;
                 }
             }
         }
+        let mut poll_timeout_ms = 1000u16;
+        if let Some(r) = pending.as_mut() {
+            if readable {
+                match r.on_readable() {
+                    Some(Ok((ips, ttl))) => {
+                        let expiry = now + Duration::from_secs(ttl as u64);
+                        // Keep IPv6-first ordering for the children.
+                        let mut v6: Vec<IpAddr> = ips.iter().filter(|a| a.is_ipv6()).copied().collect();
+                        let mut v4: Vec<IpAddr> = ips.iter().filter(|a| a.is_ipv4()).copied().collect();
+                        v6.append(&mut v4);
+                        shm_writer.publish(&v6, expiry);
+                        next_refresh = expiry;
+                        pending = None;
+                        log::info!("bootstrap refreshed {} → {v6:?} (ttl={ttl}s)", upstream.host);
+                    }
+                    Some(Err(e)) => {
+                        log::warn!("bootstrap refresh failed (keeping stale): {e}");
+                        next_refresh = now + RETRY_INTERVAL;
+                        pending = None;
+                    }
+                    None => {}
+                }
+            }
+            if let Some(r) = pending.as_mut() {
+                if now >= r.deadline() {
+                    if let Some(e) = r.on_timeout(now) {
+                        log::warn!("bootstrap refresh timed out (keeping stale): {e}");
+                        next_refresh = now + RETRY_INTERVAL;
+                        pending = None;
+                    }
+                }
+            }
+            if let Some(r) = pending.as_ref() {
+                let ms = r
+                    .deadline()
+                    .saturating_duration_since(now)
+                    .as_millis()
+                    .clamp(1, 1000);
+                poll_timeout_ms = poll_timeout_ms.min(ms as u16);
+            }
+        }
 
-        // 4. Sleep until the next refresh deadline, at most 1s (signals
-        //    interrupt the sleep; child deaths are reaped within a second).
-        let sleep_dur = next_refresh
-            .saturating_duration_since(Instant::now())
-            .min(Duration::from_secs(1));
-        std::thread::sleep(sleep_dur);
+        // 4. Wait for the bootstrap socket (or timeout) — replaces sleep;
+        //    signals interrupt the poll, children are reaped within a second.
+        {
+            use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
+            readable = false;
+            if let Some(r) = pending.as_ref() {
+                let mut fds = [PollFd::new({ use std::os::fd::AsFd; r.socket().as_fd() }, PollFlags::POLLIN)];
+                match poll(&mut fds, PollTimeout::try_from(poll_timeout_ms).unwrap_or(PollTimeout::MAX)) {
+                    Ok(n) => readable = n > 0,
+                    Err(nix::errno::Errno::EINTR) => {}
+                    Err(_) => {}
+                }
+            } else {
+                std::thread::sleep(Duration::from_millis(poll_timeout_ms as u64));
+            }
+        }
     }
     log::info!("supervisor: exit");
 }

@@ -14,6 +14,9 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
 const ATTEMPTS: usize = 3;
 /// Fallback TTL if the answer carries none.
 const DEFAULT_TTL: u32 = 300;
+/// Minimum refresh interval: some resolvers hand out pathologically short
+/// TTLs (we saw 1s from dns.google); refreshing that often is wasteful.
+const MIN_TTL: u32 = 30;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BootstrapError {
@@ -117,27 +120,8 @@ impl Bootstrap {
     /// One DNS question round-trip with retries. Returns (ips, min ttl).
     fn query(&self, host: &str, qtype: QTYPE) -> Result<(Vec<IpAddr>, u32), BootstrapError> {
         let id = rand_id();
-        let mut packet = Packet::new_query(id);
-        // RD=1: we want the recursive resolver to recurse for us. Without it
-        // the server answers with a bare referral (0 answers).
-        packet.set_flags(simple_dns::PacketFlag::RECURSION_DESIRED);
-        packet.questions.push(Question::new(
-            Name::new(host)?,
-            qtype,
-            CLASS::IN.into(),
-            false,
-        ));
-        let payload = packet.build_bytes_vec()?;
-
-        // NOTE: bind via a concrete SocketAddr — never through ToSocketAddrs,
-        // which would call getaddrinfo and can hang on nss-mdns systems.
-        // Match the socket family to the bootstrap server's family.
-        let any: SocketAddr = if self.server.is_ipv6() {
-            SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0)
-        } else {
-            SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
-        };
-        let sock = UdpSocket::bind(any)?;
+        let payload = build_query(host, qtype, id)?;
+        let sock = bind_matching(&self.server)?;
         sock.set_read_timeout(Some(QUERY_TIMEOUT))?;
         sock.set_write_timeout(Some(QUERY_TIMEOUT))?;
 
@@ -149,7 +133,7 @@ impl Bootstrap {
             }
             let mut buf = [0u8; 4096];
             match sock.recv_from(&mut buf) {
-                Ok((n, _)) => match self.parse_response(&buf[..n], id) {
+                Ok((n, _)) => match parse_response(&buf[..n], id).ok_or_else(|| BootstrapError::NoRecords(format!("id mismatch on {id}"))) {
                     Ok(r) => return Ok(r),
                     Err(e) => {
                         log::debug!("bootstrap response parse error: {e}");
@@ -163,36 +147,177 @@ impl Bootstrap {
         })))
     }
 
-    /// Extract matching A/AAAA answers and the minimum TTL.
-    fn parse_response(
-        &self,
-        buf: &[u8],
-        want_id: u16,
-    ) -> Result<(Vec<IpAddr>, u32), BootstrapError> {
-        let packet = Packet::parse(buf)?;
-        if packet.id() != want_id {
-            return Err(BootstrapError::NoRecords(format!(
-                "id mismatch: got {}, want {want_id}",
-                packet.id()
-            )));
+}
+
+/// Extract matching A/AAAA answers and the minimum TTL.
+/// Returns None when the packet's ID doesn't match (not our answer).
+fn parse_response(buf: &[u8], want_id: u16) -> Option<(Vec<IpAddr>, u32)> {
+    let packet = Packet::parse(buf).ok()?;
+    if packet.id() != want_id {
+        return None;
+    }
+    let mut ips = Vec::new();
+    let mut min_ttl = u32::MAX;
+    for rr in &packet.answers {
+        let ip = match &rr.rdata {
+            RData::A(A { address }) => Some(IpAddr::from(address.to_be_bytes())),
+            RData::AAAA(AAAA { address }) => Some(IpAddr::from(address.to_be_bytes())),
+            _ => None,
+        };
+        if let Some(ip) = ip {
+            min_ttl = min_ttl.min(rr.ttl);
+            ips.push(ip);
         }
-        let mut ips = Vec::new();
-        let mut min_ttl = u32::MAX;
-        for rr in &packet.answers {
-            let ip = match &rr.rdata {
-                RData::A(A { address }) => Some(IpAddr::from(address.to_be_bytes())),
-                RData::AAAA(AAAA { address }) => Some(IpAddr::from(address.to_be_bytes())),
-                _ => None,
-            };
-            if let Some(ip) = ip {
-                min_ttl = min_ttl.min(rr.ttl);
-                ips.push(ip);
+    }
+    if min_ttl == u32::MAX {
+        min_ttl = DEFAULT_TTL;
+    }
+    Some((ips, min_ttl))
+}
+
+
+// ---------------------------------------------------------------------------
+// Query packet construction (shared by sync and async paths)
+// ---------------------------------------------------------------------------
+
+/// Build a single-question DNS query packet for `host`/`qtype` with RD=1.
+pub fn build_query(host: &str, qtype: QTYPE, id: u16) -> Result<Vec<u8>, BootstrapError> {
+    let mut packet = Packet::new_query(id);
+    // RD=1: we want the recursive resolver to recurse for us. Without it
+    // the server answers with a bare referral (0 answers).
+    packet.set_flags(simple_dns::PacketFlag::RECURSION_DESIRED);
+    packet.questions.push(Question::new(
+        Name::new(host)?,
+        qtype,
+        CLASS::IN.into(),
+        false,
+    ));
+    Ok(packet.build_bytes_vec()?)
+}
+
+/// Bind a UDP socket matching the bootstrap server's address family.
+fn bind_matching(server: &SocketAddr) -> io::Result<UdpSocket> {
+    // NOTE: bind via a concrete SocketAddr — never through ToSocketAddrs,
+    // which would call getaddrinfo and can hang on nss-mdns systems.
+    let any: SocketAddr = if server.is_ipv6() {
+        SocketAddr::new(IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED), 0)
+    } else {
+        SocketAddr::new(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 0)
+    };
+    UdpSocket::bind(any)
+}
+
+// ---------------------------------------------------------------------------
+// AsyncResolve — non-blocking bootstrap resolution for the supervisor loop
+// ---------------------------------------------------------------------------
+
+/// Non-blocking A+AAAA resolver: both queries are sent at once; responses
+/// are matched by ID. Drive via `on_readable` / `on_timeout` from a poll loop.
+pub struct AsyncResolve {
+    sock: UdpSocket,
+    server: SocketAddr,
+    q_aaaa: Vec<u8>,
+    q_a: Vec<u8>,
+    id_aaaa: u16,
+    id_a: u16,
+    deadline: Instant,
+    attempts: usize,
+    aaaa: Option<(Vec<IpAddr>, u32)>,
+    a: Option<(Vec<IpAddr>, u32)>,
+}
+
+impl AsyncResolve {
+    /// Send both queries. `now` seeds the first round's deadline.
+    pub fn start(server: SocketAddr, host: &str, now: Instant) -> Result<Self, BootstrapError> {
+        let id_aaaa = rand_id();
+        let id_a = rand_id().wrapping_add(1);
+        let q_aaaa = build_query(host, TYPE::AAAA.into(), id_aaaa)?;
+        let q_a = build_query(host, TYPE::A.into(), id_a)?;
+        let sock = bind_matching(&server)?;
+        sock.set_nonblocking(true)?;
+        let this = Self {
+            sock,
+            server,
+            q_aaaa,
+            q_a,
+            id_aaaa,
+            id_a,
+            deadline: now + QUERY_TIMEOUT,
+            attempts: 1,
+            aaaa: None,
+            a: None,
+        };
+        this.send_both();
+        Ok(this)
+    }
+
+    fn send_both(&self) {
+        let _ = self.sock.send_to(&self.q_aaaa, self.server);
+        let _ = self.sock.send_to(&self.q_a, self.server);
+    }
+
+    /// The fd to poll for readability.
+    pub fn socket(&self) -> &UdpSocket {
+        &self.sock
+    }
+
+    /// Current round's deadline.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
+    /// Socket is readable: drain responses. Returns Some(result) when the
+    /// resolution is complete (or failed terminally).
+    pub fn on_readable(&mut self) -> Option<Result<(Vec<IpAddr>, u32), BootstrapError>> {
+        let mut buf = [0u8; 4096];
+        loop {
+            match self.sock.recv_from(&mut buf) {
+                Ok((n, _)) => {
+                    if let Some((ips, ttl)) = parse_response(&buf[..n], self.id_aaaa) {
+                        self.aaaa = Some((ips, ttl));
+                    } else if let Some((ips, ttl)) = parse_response(&buf[..n], self.id_a) {
+                        self.a = Some((ips, ttl));
+                    }
+                    // ID mismatch / parse error: ignore the datagram.
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
             }
         }
-        if min_ttl == u32::MAX {
-            min_ttl = DEFAULT_TTL;
+        if self.aaaa.is_some() && self.a.is_some() {
+            Some(Ok(self.finish()))
+        } else {
+            None
         }
-        Ok((ips, min_ttl))
+    }
+
+    /// Deadline passed: resend (bounded attempts) or fail terminally.
+    pub fn on_timeout(&mut self, now: Instant) -> Option<BootstrapError> {
+        if self.attempts >= ATTEMPTS {
+            return Some(BootstrapError::Io(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "bootstrap: all attempts timed out",
+            )));
+        }
+        self.attempts += 1;
+        self.deadline = now + QUERY_TIMEOUT;
+        self.send_both();
+        None
+    }
+
+    /// Merge both answers: (ips, min ttl).
+    fn finish(&self) -> (Vec<IpAddr>, u32) {
+        let (v6, t6) = self.aaaa.clone().unwrap_or_default();
+        let (v4, t4) = self.a.clone().unwrap_or_default();
+        let mut addrs = v6;
+        addrs.extend(v4);
+        let ttl = match (t6, t4) {
+            (0, 0) => DEFAULT_TTL,
+            (a, 0) => a,
+            (0, b) => b,
+            (a, b) => a.min(b),
+        };
+        (addrs, ttl.max(MIN_TTL))
     }
 }
 
@@ -245,7 +370,7 @@ mod tests {
         buf.extend_from_slice(&[0x00, 0x04, 5, 6, 7, 8]);
 
         let b = Bootstrap::new(IpAddr::from([127, 0, 0, 1]));
-        let (ips, ttl) = b.parse_response(&buf, 0x1234).unwrap();
+        let (ips, ttl) = parse_response(&buf, 0x1234).unwrap();
         assert_eq!(
             ips,
             vec![
@@ -262,7 +387,7 @@ mod tests {
             0x00, 0x01, 0x81, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
         let b = Bootstrap::new(IpAddr::from([127, 0, 0, 1]));
-        assert!(b.parse_response(&buf, 0x1234).is_err());
+        assert!(parse_response(&buf, 0x1234).is_none());
     }
 
     #[test]
@@ -279,5 +404,176 @@ mod tests {
         let parsed = Packet::parse(&bytes).unwrap();
         assert_eq!(parsed.id(), 0xABCD);
         assert_eq!(parsed.questions.len(), 1);
+    }
+
+    // ── AsyncResolve tests with a loopback stub DNS server ──
+
+    use std::net::UdpSocket;
+    use std::sync::mpsc;
+
+    /// A minimal stub DNS server: receives queries, hands them to the test
+    /// via a channel, and sends back whatever the test gives it.
+    struct StubDns {
+        addr: SocketAddr,
+        rx: mpsc::Receiver<(Vec<u8>, SocketAddr)>,
+        sock: UdpSocket,
+    }
+
+    impl StubDns {
+        fn spawn() -> Self {
+            let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let addr = sock.local_addr().unwrap();
+            let sock2 = sock.try_clone().unwrap();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match sock2.recv_from(&mut buf) {
+                        Ok((n, peer)) => {
+                            if tx.send((buf[..n].to_vec(), peer)).is_err() {
+                                return;
+                            }
+                        }
+                        Err(_) => return,
+                    }
+                }
+            });
+            Self { addr, rx, sock }
+        }
+
+        fn recv_query(&self) -> (Vec<u8>, SocketAddr) {
+            self.rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("stub: no query received")
+        }
+
+        fn reply_a(&self, query: &[u8], peer: SocketAddr, ip: [u8; 4], ttl: u32) {
+            let resp = build_a_response(query, ip, ttl);
+            self.sock.send_to(&resp, peer).unwrap();
+        }
+
+        fn reply_aaaa(&self, query: &[u8], peer: SocketAddr, ip: [u8; 16], ttl: u32) {
+            let resp = build_aaaa_response(query, ip, ttl);
+            self.sock.send_to(&resp, peer).unwrap();
+        }
+    }
+
+    /// Build a DNS response echoing the question, with one A answer.
+    fn build_a_response(query: &[u8], ip: [u8; 4], ttl: u32) -> Vec<u8> {
+        let mut r = Vec::new();
+        r.extend_from_slice(&query[0..2]); // ID
+        r.extend_from_slice(&[0x81, 0x80]); // QR RD RA
+        r.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        r.extend_from_slice(&query[12..]); // question
+        r.extend_from_slice(&[0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01]);
+        r.extend_from_slice(&ttl.to_be_bytes());
+        r.extend_from_slice(&[0x00, 0x04]);
+        r.extend_from_slice(&ip);
+        r
+    }
+
+    fn build_aaaa_response(query: &[u8], ip: [u8; 16], ttl: u32) -> Vec<u8> {
+        let mut r = Vec::new();
+        r.extend_from_slice(&query[0..2]);
+        r.extend_from_slice(&[0x81, 0x80]);
+        r.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
+        r.extend_from_slice(&query[12..]);
+        r.extend_from_slice(&[0xC0, 0x0C, 0x00, 0x1C, 0x00, 0x01]);
+        r.extend_from_slice(&ttl.to_be_bytes());
+        r.extend_from_slice(&[0x00, 0x10]);
+        r.extend_from_slice(&ip);
+        r
+    }
+
+    #[test]
+    fn async_resolve_out_of_order_replies() {
+        let stub = StubDns::spawn();
+        let now = Instant::now();
+        let mut r = AsyncResolve::start(stub.addr, "x.test", now).unwrap();
+
+        // Both queries arrive (AAAA + A, order unspecified). Reply to the
+        // A query first (out of order vs. send order).
+        let (q1, p1) = stub.recv_query();
+        let (q2, p2) = stub.recv_query();
+        let qtype_of = |q: &[u8]| u16::from_be_bytes([q[q.len() - 4], q[q.len() - 3]]);
+        let ((a_q, a_p), (aaaa_q, aaaa_p)) = if qtype_of(&q1) == 1 {
+            ((q1, p1), (q2, p2))
+        } else {
+            ((q2, p2), (q1, p1))
+        };
+        assert_eq!(qtype_of(&a_q), 1);
+        assert_eq!(qtype_of(&aaaa_q), 28);
+
+        stub.reply_a(&a_q, a_p, [1, 2, 3, 4], 60);
+        // Not complete yet — AAAA still missing.
+        assert!(r.on_readable().is_none());
+        stub.reply_aaaa(
+            &aaaa_q,
+            aaaa_p,
+            [0x20, 1, 0x48, 0x60, 0x48, 0x60, 0, 0, 0, 0, 0, 0, 0, 0, 0x88, 0x88],
+            30,
+        );
+        let (ips, ttl) = r.on_readable().expect("should complete").unwrap();
+        assert_eq!(ips.len(), 2);
+        assert_eq!(ttl, 30);
+        assert!(ips.contains(&IpAddr::from([1, 2, 3, 4])));
+        assert!(ips.contains(&"2001:4860:4860::8888".parse().unwrap()));
+    }
+
+    #[test]
+    fn async_resolve_clamps_pathological_ttl() {
+        let stub = StubDns::spawn();
+        let now = Instant::now();
+        let mut r = AsyncResolve::start(stub.addr, "x.test", now).unwrap();
+        let (q1, p1) = stub.recv_query();
+        let (q2, p2) = stub.recv_query();
+        let qtype_of = |q: &[u8]| u16::from_be_bytes([q[q.len() - 4], q[q.len() - 3]]);
+        let ((a_q, a_p), (aaaa_q, aaaa_p)) = if qtype_of(&q1) == 1 {
+            ((q1, p1), (q2, p2))
+        } else {
+            ((q2, p2), (q1, p1))
+        };
+        // TTL=1 (pathological) and TTL=118 → clamped to MIN_TTL (30).
+        stub.reply_a(&a_q, a_p, [1, 2, 3, 4], 1);
+        stub.reply_aaaa(&aaaa_q, aaaa_p, [0u8; 16], 118);
+        let (_ips, ttl) = r.on_readable().expect("should complete").unwrap();
+        assert_eq!(ttl, MIN_TTL);
+    }
+
+    #[test]
+    fn async_resolve_ignores_mismatched_id() {
+        let stub = StubDns::spawn();
+        let now = Instant::now();
+        let mut r = AsyncResolve::start(stub.addr, "x.test", now).unwrap();
+        let (q1, p1) = stub.recv_query();
+        let (_q2, _p2) = stub.recv_query();
+
+        // Reply with a wrong ID: must be ignored (no completion).
+        let mut bad = build_a_response(&q1, [5, 6, 7, 8], 60);
+        bad[0] ^= 0xFF;
+        stub.sock.send_to(&bad, p1).unwrap();
+        assert!(r.on_readable().is_none());
+    }
+
+    #[test]
+    fn async_resolve_timeout_retries_then_fails() {
+        let stub = StubDns::spawn();
+        let now = Instant::now();
+        let mut r = AsyncResolve::start(stub.addr, "x.test", now).unwrap();
+        let _ = stub.recv_query();
+        let _ = stub.recv_query();
+
+        let now2 = now + Duration::from_secs(4);
+        // First timeout: resend (no terminal error).
+        assert!(r.on_timeout(now2).is_none());
+        // The resend should arrive at the stub.
+        let _ = stub.recv_query();
+        let _ = stub.recv_query();
+        // Second timeout: another resend, still not terminal.
+        let now3 = now2 + Duration::from_secs(4);
+        assert!(r.on_timeout(now3).is_none());
+        // Third timeout: attempts exhausted → terminal error.
+        let now4 = now3 + Duration::from_secs(4);
+        assert!(r.on_timeout(now4).is_some());
     }
 }
