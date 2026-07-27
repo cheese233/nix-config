@@ -266,8 +266,11 @@ fn main() {
     // ── Prefork workers ──
     // pid → (cpu, child_idx, started_at, fast_failures)
     let mut children: HashMap<Pid, (u32, usize, Instant, u32)> = HashMap::new();
+    // cpu → (child_idx, restart_at, fast_failures): crash-backoff restarts,
+    // scheduled instead of slept through so the loop never blocks.
+    let mut pending_restarts: HashMap<u32, (usize, Instant, u32)> = HashMap::new();
     for (idx, &cpu) in cpus.iter().enumerate() {
-        spawn_worker(cpu, idx, &cli, &listen, &upstream, &token, shm_fd, &mut children);
+        spawn_worker(cpu, idx, 0, &cli, &listen, &upstream, &token, shm_fd, &mut children);
     }
 
     // ── Supervise: reap children, keep bootstrap resolution fresh in
@@ -280,16 +283,31 @@ fn main() {
     let mut pending: Option<bootstrap::AsyncResolve> = None;
     let mut readable = false;
     loop {
+        // 0. Spawn workers whose scheduled restart time has arrived.
+        {
+            let now = Instant::now();
+            let due: Vec<u32> = pending_restarts
+                .iter()
+                .filter(|(_, (_, t, _))| *t <= now)
+                .map(|(&c, _)| c)
+                .collect();
+            for cpu in due {
+                if let Some((idx, _, fails)) = pending_restarts.remove(&cpu) {
+                    spawn_worker(cpu, idx, fails, &cli, &listen, &upstream, &token, shm_fd, &mut children);
+                }
+            }
+        }
+
         // 1. Reap all exited children (non-blocking).
         loop {
             match waitpid(None, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
                 Ok(WaitStatus::Exited(pid, code)) => {
                     log::warn!("worker {pid} exited with code {code}");
-                    handle_child_exit(pid, &cli, &listen, &upstream, &token, shm_fd, &mut children);
+                    schedule_child_exit(pid, &mut children, &mut pending_restarts);
                 }
                 Ok(WaitStatus::Signaled(pid, sig, _)) => {
                     log::warn!("worker {pid} killed by {sig}");
-                    handle_child_exit(pid, &cli, &listen, &upstream, &token, shm_fd, &mut children);
+                    schedule_child_exit(pid, &mut children, &mut pending_restarts);
                 }
                 Ok(_) => break,
                 Err(nix::errno::Errno::EINTR) => continue,
@@ -371,6 +389,14 @@ fn main() {
                 poll_timeout_ms = poll_timeout_ms.min(ms as u16);
             }
         }
+        // Wake in time for the next scheduled worker restart.
+        if let Some(t) = pending_restarts.values().map(|(_, t, _)| *t).min() {
+            let ms = t
+                .saturating_duration_since(now)
+                .as_millis()
+                .clamp(1, 1000);
+            poll_timeout_ms = poll_timeout_ms.min(ms as u16);
+        }
 
         // 4. Wait for the bootstrap socket (or timeout) — replaces sleep;
         //    signals interrupt the poll, children are reaped within a second.
@@ -392,15 +418,22 @@ fn main() {
     log::info!("supervisor: exit");
 }
 
-#[allow(clippy::too_many_arguments)]
-fn handle_child_exit(
+/// Backoff before restarting a repeatedly fast-failing worker.
+/// fails=0 → immediate; fails=N → 2^N seconds, capped at 32s.
+fn backoff_delay(fails: u32) -> Duration {
+    if fails == 0 {
+        Duration::ZERO
+    } else {
+        Duration::from_secs(1 << fails.min(5))
+    }
+}
+
+/// Record a dead worker for scheduled restart (no sleeping here — the
+/// supervisor loop must never block on backoff).
+fn schedule_child_exit(
     pid: Pid,
-    cli: &Cli,
-    listen: &SocketAddr,
-    upstream: &url::HttpsUrl,
-    token: &Option<Arc<str>>,
-    shm_fd: std::os::fd::RawFd,
     children: &mut HashMap<Pid, (u32, usize, Instant, u32)>,
+    pending_restarts: &mut HashMap<u32, (usize, Instant, u32)>,
 ) {
     let Some((cpu, idx, started, fails)) = children.remove(&pid) else {
         return;
@@ -408,25 +441,24 @@ fn handle_child_exit(
     if SHUTDOWN.load(Ordering::SeqCst) {
         return;
     }
-    // Backoff if the child died quickly after start.
     let lived = started.elapsed();
     let fails = if lived < Duration::from_secs(10) {
         fails + 1
     } else {
         0
     };
+    let delay = backoff_delay(fails);
     if fails > 0 {
-        let delay = Duration::from_secs(1 << fails.min(5)); // 2..32s
         log::warn!("worker on cpu {cpu} died after {lived:.1?}; restart #{fails} in {delay:.1?}");
-        std::thread::sleep(delay);
     }
-    spawn_worker(cpu, idx, cli, listen, upstream, token, shm_fd, children);
+    pending_restarts.insert(cpu, (idx, Instant::now() + delay, fails));
 }
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_worker(
     cpu: u32,
     child_idx: usize,
+    fails: u32,
     cli: &Cli,
     listen: &SocketAddr,
     upstream: &url::HttpsUrl,
@@ -434,7 +466,6 @@ fn spawn_worker(
     shm_fd: std::os::fd::RawFd,
     children: &mut HashMap<Pid, (u32, usize, Instant, u32)>,
 ) {
-    let fails = children.values().find(|(c, _, _, _)| *c == cpu).map(|(_, _, _, f)| *f).unwrap_or(0);
     match unsafe { fork() } {
         Ok(ForkResult::Parent { child }) => {
             children.insert(child, (cpu, child_idx, Instant::now(), fails));
@@ -482,6 +513,19 @@ mod tests {
     fn physical_cores_nonempty() {
         let cores = physical_cores();
         assert!(!cores.is_empty());
+    }
+
+    #[test]
+    fn backoff_delay_schedule() {
+        assert_eq!(backoff_delay(0), Duration::ZERO);
+        assert_eq!(backoff_delay(1), Duration::from_secs(2));
+        assert_eq!(backoff_delay(2), Duration::from_secs(4));
+        assert_eq!(backoff_delay(3), Duration::from_secs(8));
+        assert_eq!(backoff_delay(4), Duration::from_secs(16));
+        assert_eq!(backoff_delay(5), Duration::from_secs(32));
+        // Capped at 32s beyond 2^5.
+        assert_eq!(backoff_delay(6), Duration::from_secs(32));
+        assert_eq!(backoff_delay(100), Duration::from_secs(32));
     }
 
     #[test]
