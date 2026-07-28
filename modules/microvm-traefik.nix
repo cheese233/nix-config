@@ -310,6 +310,18 @@ in
 
   systemd.tmpfiles.rules = [
     "d ${config.microvm.stateDir}/traefik/journal 0755 root root -"
+    # Pin the traefik data dir to root:root on the *host*. The nixpkgs
+    # traefik module's guest tmpfiles rule chowns this share to the traefik
+    # uid; that ownership persists on the host and the guest can't reliably
+    # chown it back through virtiofsd (mount-timing race + no host caps in
+    # virtiofsd's namespace sandbox). traefik runs as root but with
+    # CapabilityBoundingSet=cap_net_bind_service (no DAC_OVERRIDE), so it
+    # can only write the dir if it owns it — i.e. root:root. Fixing it here,
+    # on the host with full caps, is the only reliable place. (If a stale
+    # acme.json from a prior run blocks traefik, remove it manually:
+    #   rm -f /var/lib/microvms/traefik/traefik-data/acme.json
+    # — traefik recreates it itself.)
+    "d ${config.microvm.stateDir}/traefik/traefik-data 0700 root root -"
     # Symlink this VM's journal dir into the host's so `journalctl --merge` sees it.
     "L+ /var/log/journal/70aef1c0000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/70aef1c0000000000000000000000000"
   ];
