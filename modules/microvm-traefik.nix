@@ -188,13 +188,18 @@ in
           };
           # Reverse proxy bitwarden.$STATION -> vaultwarden container
           # (resolved via the host's mDNS bridge as vaultwarden.local).
+          # NB: use backtick raw strings inside {{ }} — the Nix TOML
+          # serializer escapes `"` to `\"`, which the Go template parser
+          # rejects ("unexpected \" in operand"). text/template supports
+          # raw string literals (lex.go: `case r == '`' => lexRawQuote`),
+          # and TOML leaves backticks unescaped in basic strings.
           http.routers.bitwarden = {
-            rule = "Host(`bitwarden.{{ env \"STATION\" }}`)";
+            rule = "Host(`bitwarden.{{ env `STATION` }}`)";
             service = "bitwarden";
             entryPoints = [ "websecure" ];
             tls.certResolver = "letsencrypt";
             tls.domains = [
-              { main = "*.{{ env \"STATION\" }}"; sans = [ "{{ env \"STATION\" }}" ]; }
+              { main = "*.{{ env `STATION` }}"; sans = [ "{{ env `STATION` }}" ]; }
             ];
           };
           http.services.bitwarden = {
@@ -221,6 +226,19 @@ in
       systemd.tmpfiles.rules = [
         "d /var/lib/traefik 0750 traefik traefik -"
       ];
+
+      # virtiofsd's default `namespace` sandbox, when run as root without
+      # --uid-map, sets up a 1:1 mapping for the daemon's uid (0) only.
+      # Consequently only guest *root* can read/write files on the
+      # virtiofs-shared data dir — the non-root `traefik` user gets
+      # "permission denied" opening acme.json. (The age env file works
+      # only because systemd reads EnvironmentFile= as PID 1 before
+      # dropping privileges.) Run traefik as root in this VM so it can
+      # manage its acme.json on the share. To keep traefik non-root
+      # instead, configure `microvm.virtiofsd.extraArgs = [ "--sandbox=none" ]`
+      # (or a --uid-map) so virtiofsd honours the guest uid.
+      systemd.services.traefik.serviceConfig.User = lib.mkForce "root";
+      systemd.services.traefik.serviceConfig.Group = lib.mkForce "root";
 
       users.users.traefik = {
         isSystemUser = true;
