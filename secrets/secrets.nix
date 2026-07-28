@@ -9,4 +9,5 @@ in
   "awg-key.age".publicKeys = [ nixos ];
   "doh-env.age".publicKeys = [ nixos ];
   "traefik-ddns-env.age".publicKeys = [ nixos ];
+  "vaultwarden-env.age".publicKeys = [ nixos ];
 }

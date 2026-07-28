@@ -75,6 +75,9 @@
       file = ../secrets/doh-env.age;
       path = "/run/agenix/doh-env";
     };
+    secrets.vaultwarden-env = {
+      file = ../secrets/vaultwarden-env.age;
+    };
   };
 
   # ==================== PPPoE ====================

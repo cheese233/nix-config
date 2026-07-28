@@ -26,7 +26,7 @@ in
   systemd.services = veth.services // {
     "${config.virtualisation.oci-containers.containers.vaultwarden.serviceName}" = {
       serviceConfig.StateDirectory = "vaultwarden";
-      after = [ "podman-veth-vaultwarden.service" ];
+      after = [ "podman-veth-vaultwarden.service" "agenix.service" ];
       requires = [ "podman-veth-vaultwarden.service" ];
     };
   };
@@ -42,6 +42,10 @@ in
 
     volumes = [
       "/var/lib/vaultwarden/data:/data"
+    ];
+
+    environmentFiles = [
+      "/run/agenix/vaultwarden-env"
     ];
 
     environment = {

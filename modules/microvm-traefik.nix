@@ -144,16 +144,9 @@ in
 
           api.dashboard = true;
 
-          entryPoints.web = {
-            address = ":80";
-            http.redirections.entryPoint = {
-              to = "websecure";
-              scheme = "https";
-              permanent = true;
-            };
-          };
           entryPoints.websecure = {
-            address = ":443";
+            # Pure HTTPS reverse proxy — no plaintext :80 listener.
+            address = ":1145";
           };
           entryPoints.dashboard = {
             address = ":8443";
@@ -166,8 +159,16 @@ in
           certificatesResolvers.letsencrypt.acme = {
             email = "postmaster+traefik@c23.me";
             storage = "${config.services.traefik.dataDir}/acme.json";
-            tlsChallenge = {};
+            # Wildcard certs require a DNS challenge. The Cloudflare API
+            # token is supplied via the age-encrypted env file
+            # (CF_DNS_API_TOKEN), which the NixOS module loads into the
+            # process environment via environmentFiles.
+            dnsChallenge.provider = "cloudflare";
           };
+
+          # Emit the rendered Go-template dynamic config at INFO so the
+          # substituted hostnames are visible in the journal.
+          providers.file.debugLogGeneratedTemplate = true;
 
           log = {
             level = "INFO";
@@ -175,11 +176,31 @@ in
         };
 
         # Dynamic configuration: add routers/services here as you add backends.
+        # The file provider interprets this TOML as a Go template (see
+        # https://doc.traefik.io/traefik/providers/file/#go-templating),
+        # so {{ env "VAR" }} is substituted from the traefik process env,
+        # which is populated by environmentFiles (age-encrypted traefik-env).
         dynamicConfigOptions = {
           http.routers.dashboard = {
             rule = "Host(`traefik.local`) && (PathPrefix(`/api`) || PathPrefix(`/dashboard`))";
             service = "api@internal";
             entryPoints = [ "dashboard" ];
+          };
+          # Reverse proxy bitwarden.$STATION -> vaultwarden container
+          # (resolved via the host's mDNS bridge as vaultwarden.local).
+          http.routers.bitwarden = {
+            rule = "Host(`bitwarden.{{ env \"STATION\" }}`)";
+            service = "bitwarden";
+            entryPoints = [ "websecure" ];
+            tls.certResolver = "letsencrypt";
+            tls.domains = [
+              { main = "*.{{ env \"STATION\" }}"; sans = [ "{{ env \"STATION\" }}" ]; }
+            ];
+          };
+          http.services.bitwarden = {
+            loadBalancer.servers = [
+              { url = "http://vaultwarden.local:8222"; }
+            ];
           };
           udp.routers.awg = {
             entryPoints = [ "awg-udp" ];
@@ -231,7 +252,7 @@ in
       networking.nftables.enable = true;
       networking.firewall = {
         enable = true;
-        allowedTCPPorts = [ 80 443 8443 ];
+        allowedTCPPorts = [ 1145 8443 ];
         allowedUDPPorts = [ 47999 ];
       };
 
