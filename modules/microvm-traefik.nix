@@ -223,20 +223,20 @@ in
         };
       };
 
-      systemd.tmpfiles.rules = [
-        "d /var/lib/traefik 0750 traefik traefik -"
+      # The nixpkgs traefik module ships two things that, combined, break
+      # acme.json access on a virtiofs share:
+      #   - `d /var/lib/traefik 0700 traefik traefik` (tmpfiles), which runs
+      #     as guest root and chowns the *host-shared* dir to the traefik uid;
+      #   - `CapabilityBoundingSet = cap_net_bind_service`, which drops
+      #     CAP_DAC_OVERRIDE.
+      # So traefik (here run as root, uid 0, *without* DAC_OVERRIDE) is
+      # "others" against a traefik-owned 0700 dir and is denied. mkAfter a
+      # root:root rule so the dir ends up owned by root (uid 0) — traefik is
+      # then the owner and can write acme.json with no extra capability.
+      systemd.tmpfiles.rules = lib.mkAfter [
+        "d /var/lib/traefik 0700 root root -"
       ];
 
-      # virtiofsd's default `namespace` sandbox, when run as root without
-      # --uid-map, sets up a 1:1 mapping for the daemon's uid (0) only.
-      # Consequently only guest *root* can read/write files on the
-      # virtiofs-shared data dir — the non-root `traefik` user gets
-      # "permission denied" opening acme.json. (The age env file works
-      # only because systemd reads EnvironmentFile= as PID 1 before
-      # dropping privileges.) Run traefik as root in this VM so it can
-      # manage its acme.json on the share. To keep traefik non-root
-      # instead, configure `microvm.virtiofsd.extraArgs = [ "--sandbox=none" ]`
-      # (or a --uid-map) so virtiofsd honours the guest uid.
       systemd.services.traefik.serviceConfig.User = lib.mkForce "root";
       systemd.services.traefik.serviceConfig.Group = lib.mkForce "root";
 
