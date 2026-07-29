@@ -407,7 +407,7 @@
       lan-to-wan = { from = [ "lan" ]; to = [ "wan" ]; verdict = "accept"; masquerade = true; };
       lan-to-nat64 = { from = [ "lan" ]; to = [ "nat64" ]; verdict = "accept"; };
       nat64-to-wan = { from = [ "nat64" ]; to = [ "wan" ]; verdict = "accept"; masquerade = true; };
-      lan-to-fw-icmp = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta protocol ip icmp accept comment \"Allow ICMP from LAN\"" ]; };
+      lan-to-fw-icmp = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "ip protocol icmp accept comment \"Allow ICMP from LAN\"" ]; };
       lan-to-fw-ipv6 = { from = [ "lan" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from LAN\"" ]; };
       lan-to-fw-dns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
       lan-to-fw-mdns = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 5353 ]; };
@@ -435,6 +435,7 @@
     after = [ "generated" ];
     rules = [ "meta protocol ip6 iifname awg0 oifname ppp0 masquerade" ];
   };
+
 
   # ==================== DAE ====================
   services.dae = {
@@ -472,6 +473,7 @@
         resident {
           policy: fixed(1)
         }
+
         vowifi {
           policy: fixed(2)
         }
