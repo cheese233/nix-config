@@ -3,6 +3,17 @@
 let
 
   tapId = "vm-traefik";
+
+  # Fixed uid/gid for the in-VM traefik user. NixOS otherwise allocates a
+  # *dynamic* uid for system users, which shifts across rebuilds as other
+  # users are added/removed — leaving acme.json and the virtiofs-shared
+  # data dir owned by stale traefik uids the current traefik process can no
+  # longer access (and root can't either, since the traefik module drops
+  # CAP_DAC_OVERRIDE via CapabilityBoundingSet). Pinning the uid keeps
+  # ownership stable across rebuilds. The same numeric uid is used on the
+  # host to chown the share before the VM boots.
+  traefikUid = 9829;
+  traefikGid = 9829;
 in
 {
   # QEMU MicroVM running Traefik, directly attached to the existing br-lan bridge.
@@ -223,28 +234,16 @@ in
         };
       };
 
-      # The nixpkgs traefik module ships two things that, combined, break
-      # acme.json access on a virtiofs share:
-      #   - `d /var/lib/traefik 0700 traefik traefik` (tmpfiles), which runs
-      #     as guest root and chowns the *host-shared* dir to the traefik uid;
-      #   - `CapabilityBoundingSet = cap_net_bind_service`, which drops
-      #     CAP_DAC_OVERRIDE.
-      # So traefik (here run as root, uid 0, *without* DAC_OVERRIDE) is
-      # "others" against a traefik-owned 0700 dir and is denied. mkAfter a
-      # root:root rule so the dir ends up owned by root (uid 0) — traefik is
-      # then the owner and can write acme.json with no extra capability.
-      systemd.tmpfiles.rules = lib.mkAfter [
-        "d /var/lib/traefik 0700 root root -"
+      systemd.tmpfiles.rules = [
+        "d /var/lib/traefik 0750 traefik traefik -"
       ];
-
-      systemd.services.traefik.serviceConfig.User = lib.mkForce "root";
-      systemd.services.traefik.serviceConfig.Group = lib.mkForce "root";
 
       users.users.traefik = {
         isSystemUser = true;
         group = "traefik";
+        uid = traefikUid;
       };
-      users.groups.traefik = {};
+      users.groups.traefik.gid = traefikGid;
 
       # microvm.vsock.ssh.enable turns on openssh. We want only the
       # vsock socket that systemd-ssh-generator creates at boot
@@ -310,21 +309,46 @@ in
 
   systemd.tmpfiles.rules = [
     "d ${config.microvm.stateDir}/traefik/journal 0755 root root -"
-    # Pin the traefik data dir to root:root on the *host*. The nixpkgs
-    # traefik module's guest tmpfiles rule chowns this share to the traefik
-    # uid; that ownership persists on the host and the guest can't reliably
-    # chown it back through virtiofsd (mount-timing race + no host caps in
-    # virtiofsd's namespace sandbox). traefik runs as root but with
-    # CapabilityBoundingSet=cap_net_bind_service (no DAC_OVERRIDE), so it
-    # can only write the dir if it owns it — i.e. root:root. Fixing it here,
-    # on the host with full caps, is the only reliable place. (If a stale
-    # acme.json from a prior run blocks traefik, remove it manually:
-    #   rm -f /var/lib/microvms/traefik/traefik-data/acme.json
-    # — traefik recreates it itself.)
-    "d ${config.microvm.stateDir}/traefik/traefik-data 0700 root root -"
     # Symlink this VM's journal dir into the host's so `journalctl --merge` sees it.
     "L+ /var/log/journal/70aef1c0000000000000000000000000 - - - - ${config.microvm.stateDir}/traefik/journal/70aef1c0000000000000000000000000"
   ];
+
+  # Pin the virtiofs-shared data dir (and acme.json) to the fixed traefik
+  # uid on the *host*, before the microvm boots. This must run on the host
+  # (real caps, no virtiofsd namespace sandbox in the way) because:
+  #   - the nixpkfs traefik module's guest tmpfiles rule chowns the share
+  #     to the traefik uid, but only reliably when the virtiofs mount is up
+  #     at tmpfiles time (a race), so it can't be relied on to fix a stale
+  #     owner left by a previous dynamic uid;
+  #   - acme.json is created by traefik (uid N) but a stale empty one from
+  #     a prior (different) dynamic uid blocks the current traefik.
+  systemd.services.traefik-share-chown = {
+    description = "Pin traefik virtiofs share ownership to the fixed traefik uid";
+    after = [ "systemd-tmpfiles-setup.service" ];
+    before = [ "microvm@traefik.service" ];
+    wantedBy = [ "microvm@traefik.service" ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+    };
+    path = [ pkgs.coreutils ];
+    script = ''
+      D="${config.microvm.stateDir}/traefik/traefik-data"
+      mkdir -p "$D"
+      chown ${toString traefikUid}:${toString traefikGid} "$D" 2>/dev/null || true
+      chmod 0700 "$D" 2>/dev/null || true
+      if [ -f "$D/acme.json" ]; then
+        if [ ! -s "$D/acme.json" ]; then
+          # stale empty file from a previous dynamic uid — drop it so
+          # traefik recreates a fresh one it can read/write.
+          rm -f "$D/acme.json"
+        else
+          chown ${toString traefikUid}:${toString traefikGid} "$D/acme.json" 2>/dev/null || true
+          chmod 0600 "$D/acme.json" 2>/dev/null || true
+        fi
+      fi
+    '';
+  };
 
   # DMZ: allow all WAN traffic to the Traefik VM, matched by the EUI-64
   # interface ID derived from its MAC so it's independent of the delegated prefix.
