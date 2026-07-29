@@ -472,6 +472,9 @@
         resident {
           policy: fixed(1)
         }
+        vowifi {
+          policy: fixed(2)
+        }
       }
       dns {
         upstream {
@@ -489,6 +492,8 @@
         dip(geoip:private) -> direct
         pname(unbound) -> must_rules
         pname(microdoh3) -> must_rules
+
+        dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
 
         dip(geoip:cn) -> direct
         domain(geosite:cn) -> direct
