@@ -49,7 +49,7 @@ in
     ];
 
     environment = {
-      ROCKET_ADDRESS = "0.0.0.0";
+      ROCKET_ADDRESS = "::";
       ROCKET_PORT = "8222";
       ROCKET_LOG = "critical";
       SIGNUPS_ALLOWED = "false";
