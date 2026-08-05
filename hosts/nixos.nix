@@ -422,9 +422,7 @@
       awg-to-lan = { from = [ "awg" ]; to = [ "lan" ]; verdict = "accept"; };
       awg-to-nat64 = { from = [ "awg" ]; to = [ "nat64" ]; verdict = "accept"; };
       awg-to-wan = { from = [ "awg" ]; to = [ "wan" ]; verdict = "accept"; };
-      awg-to-fw-dns = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 53 ]; allowedTCPPorts = [ 53 ]; };
-      awg-to-fw-icmpv6 = { from = [ "awg" ]; to = [ "fw" ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 from AWG\"" ]; };
-      awg-to-fw-dhcpv6 = { from = [ "awg" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };
+      awg-to-fw = { from = [ "awg" ]; to = [ "fw" ]; verdict = "accept"; };
       wan-to-fw-ipv6 = { from = [ "wan" ]; to = [ "fw" ]; allowedUDPPorts = [ 546 ]; extraLines = [ "meta l4proto icmpv6 accept comment \"Allow ICMPv6 for RAs and ND\"" ]; };
     };
   };
