@@ -451,7 +451,7 @@
       global {
         tproxy_port: 10800
         wan_interface: ppp0 # Use "auto" to auto detect WAN interface.
-        lan_interface: br-lan
+        lan_interface: br-lan, awg0
 
         log_level: info
         allow_insecure: false
@@ -515,6 +515,10 @@
     RuntimeMaxFileSize=5M
     RuntimeMaxFiles=3
   '';
+  systemd.services.dae = {
+    after = [ "wg-quick-awg0.service" ];
+    wants = [ "wg-quick-awg0.service" ];
+  };
   systemd.services.dae.serviceConfig.LogNamespace = "dae";
 
   services.amneziawg.interfaces.awg0 = {
