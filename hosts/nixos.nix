@@ -113,7 +113,8 @@
     "net.ipv6.conf.all.forwarding" = 1;
     "net.ipv6.conf.all.accept_ra" = 2;
     "net.ipv4.conf.all.forwarding" = 1;
-    "net.ipv4.conf.br-lan.send_redirects" = 0;
+    "net.ipv4.conf.all.send_redirects" = 0;
+    "net.ipv4.conf.default.send_redirects" = 0;
     "net.ipv4.ip_forward" = 1;
   };
 
@@ -519,6 +520,7 @@
     after = [ "wg-quick-awg0.service" ];
     wants = [ "wg-quick-awg0.service" ];
   };
+  systemd.services.dae.serviceConfig.Restart = "on-failure";
   systemd.services.dae.serviceConfig.LogNamespace = "dae";
 
   services.amneziawg.interfaces.awg0 = {
