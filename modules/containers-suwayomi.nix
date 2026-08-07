@@ -3,6 +3,16 @@
 let
   mkPodmanVeth = import ../modules/podman-veth.nix { inherit pkgs lib inputs; };
 
+  # nixpkgs (26.05 and master) still ships v2.1.1867, but that version cannot read
+  # databases created by v2.2+/v2.3+ (CATEGORY."ORDER" was renamed to sort_order).
+  suwayomiServer = pkgs.suwayomi-server.overrideAttrs (old: {
+    version = "2.3.2243";
+    src = pkgs.fetchurl {
+      url = "https://github.com/Suwayomi/Suwayomi-Server/releases/download/v2.3.2243/Suwayomi-Server-v2.3.2243.jar";
+      hash = "sha256-ghFBsy4XDUoC08vf7Vd+2PB70iOD/19BMuu1rkDpjdU=";
+    };
+  });
+
   veth = mkPodmanVeth {
     name   = "suwayomi";
     bridge = "br-lan";
@@ -13,10 +23,10 @@ let
   suwayomiImage = pkgs.dockerTools.streamLayeredImage {
     name = "suwayomi";
     tag  = "latest";
-    contents = [ pkgs.suwayomi-server pkgs.bash pkgs.coreutils ];
+    contents = [ suwayomiServer pkgs.bash pkgs.coreutils ];
     config = {
       Cmd = [
-        "${pkgs.suwayomi-server}/bin/tachidesk-server"
+        "${suwayomiServer}/bin/tachidesk-server"
         "-Dsuwayomi.tachidesk.config.server.initialOpenInBrowserEnabled=false"
         "-Dsuwayomi.tachidesk.config.server.rootDir=/data/.local/share/Tachidesk/downloads"
       ];
