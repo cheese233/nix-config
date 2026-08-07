@@ -18,12 +18,12 @@ let
       Cmd = [
         "${pkgs.suwayomi-server}/bin/tachidesk-server"
         "-Dsuwayomi.tachidesk.config.server.initialOpenInBrowserEnabled=false"
-        "-Dsuwayomi.tachidesk.config.server.rootDir=/data/downloads"
+        "-Dsuwayomi.tachidesk.config.server.rootDir=/data/.local/share/Tachidesk/downloads"
       ];
       Env = [
         "HOME=/data"
       ];
-      ExposedPorts = { "8080/tcp" = { }; };
+      ExposedPorts = { "4567/tcp" = { }; };
       Volumes = { "/data" = { }; };
     };
   };
@@ -48,7 +48,7 @@ in
     autoStart = true;
 
     volumes = [
-      "/var/lib/suwayomi/data:/data"
+      "/var/lib/suwayomi/data:/data/.local/share/Tachidesk"
     ];
 
     extraOptions = [
