@@ -252,6 +252,10 @@
         prefetch-key = true;
         do-not-query-localhost = false;
       };
+      remote-control = {
+        control-enable = true;
+        control-port = 8953;
+      };
       # Include runtime-generated forward/stub zones (see unbound-forward-zones.service).
       include = "/var/lib/unbound/forward-zones.conf";
     };
@@ -480,7 +484,7 @@
       }
       dns {
         upstream {
-          unbound: 'udp://127.0.0.1:53'
+          unbound: 'tcp://127.0.0.1:53'
         }
         routing {
           request {
