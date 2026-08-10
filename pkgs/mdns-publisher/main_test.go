@@ -51,6 +51,39 @@ func newTestZone(t *testing.T) *hostnameZone {
 	}
 }
 
+func TestRecordsForIPs(t *testing.T) {
+	records := recordsForIPs("host.local.", []net.IP{
+		net.ParseIP("192.168.1.10"),
+		net.ParseIP("2001:db8::10"),
+		net.ParseIP("169.254.1.10"),
+		net.ParseIP("127.0.0.1"),
+	}, 120)
+
+	if len(records) != 2 {
+		t.Fatalf("got %d records, want 2", len(records))
+	}
+	if _, ok := records[0].(*dns.A); !ok {
+		t.Fatalf("first record is %T, want A", records[0])
+	}
+	if _, ok := records[1].(*dns.AAAA); !ok {
+		t.Fatalf("second record is %T, want AAAA", records[1])
+	}
+}
+
+func TestHostnameZoneReplaceRecords(t *testing.T) {
+	old := []dns.RR{mustA(t, "host.local.", "192.168.1.10", 120)}
+	zone := &hostnameZone{records: old}
+	newRecords := []dns.RR{mustA(t, "host.local.", "192.168.1.11", 120)}
+
+	previous, changed := zone.replaceRecords(newRecords, nil)
+	if !changed || len(previous) != 1 || !rrdataEqual(previous[0], old[0]) {
+		t.Fatalf("replaceRecords returned previous=%v changed=%v", previous, changed)
+	}
+	if _, changed := zone.replaceRecords(newRecords, nil); changed {
+		t.Fatal("replacing with the same records should not report a change")
+	}
+}
+
 // newTestServer creates a real mdnsServer bound to localhost UDP sockets
 // so that handlePacket can be exercised over the wire.  The caller must
 // call server.Shutdown() when done.

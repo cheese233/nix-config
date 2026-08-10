@@ -30,9 +30,9 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"slices"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -73,8 +73,8 @@ const (
 )
 
 var (
-	mdnsAddr4 = &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: mdnsPort}
-	mdnsAddr6 = &net.UDPAddr{IP: net.ParseIP("ff02::fb"), Port: mdnsPort}
+	mdnsAddr4  = &net.UDPAddr{IP: net.ParseIP("224.0.0.251"), Port: mdnsPort}
+	mdnsAddr6  = &net.UDPAddr{IP: net.ParseIP("ff02::fb"), Port: mdnsPort}
 	mdnsGroup4 = net.ParseIP("224.0.0.251")
 	mdnsGroup6 = net.ParseIP("ff02::fb")
 )
@@ -88,16 +88,20 @@ const (
 	stateRunning
 )
 
-// hostnameZone serves a fixed set of A/AAAA records and a negative-response
+// hostnameZone serves the current set of A/AAAA records and a negative-response
 // NSEC record.  The records have the cache-flush bit set in their Class field
 // (RFC 6762 §10.2).  For legacy unicast queries (source port != 5353) we strip
 // the bit and cap the TTL (§6.7).
 type hostnameZone struct {
+	mu      sync.RWMutex
 	records []dns.RR
 	nsec    dns.RR
 }
 
 func (z *hostnameZone) Records(q dns.Question, legacy bool) []dns.RR {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+
 	qclass := q.Qclass &^ quBit
 	if qclass != dns.ClassINET && qclass != dns.ClassANY {
 		return nil
@@ -137,6 +141,61 @@ func (z *hostnameZone) Records(q dns.Question, legacy bool) []dns.RR {
 	}
 
 	return out
+}
+
+func copyRecords(records []dns.RR) []dns.RR {
+	if len(records) == 0 {
+		return nil
+	}
+	out := make([]dns.RR, 0, len(records))
+	for _, r := range records {
+		out = append(out, dns.Copy(r))
+	}
+	return out
+}
+
+func sameRecords(a, b []dns.RR) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for _, ar := range a {
+		found := false
+		for _, br := range b {
+			if ar.Header().Rrtype == br.Header().Rrtype && rrdataEqual(ar, br) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// replaceRecords swaps the advertised addresses and returns the old records
+// so callers can send RFC 6762 goodbye packets for them.
+func (z *hostnameZone) replaceRecords(records []dns.RR, nsec dns.RR) ([]dns.RR, bool) {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+
+	if sameRecords(z.records, records) {
+		return nil, false
+	}
+	old := copyRecords(z.records)
+	z.records = copyRecords(records)
+	if nsec == nil {
+		z.nsec = nil
+	} else {
+		z.nsec = dns.Copy(nsec)
+	}
+	return old, true
+}
+
+func (z *hostnameZone) snapshotRecords() []dns.RR {
+	z.mu.RLock()
+	defer z.mu.RUnlock()
+	return copyRecords(z.records)
 }
 
 // filterKnownAnswers removes records that the querier already knows with a
@@ -340,36 +399,8 @@ func main() {
 	}
 
 	fqdn := dns.Fqdn(hostname + ".local")
-	uintTTL := uint32(*ttl)
-
 	// Build records with cache-flush bit set (RFC 6762 §10.2).
-	var records []dns.RR
-	for _, ip := range ips {
-		if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLoopback() {
-			continue
-		}
-		if v4 := ip.To4(); v4 != nil {
-			records = append(records, &dns.A{
-				Hdr: dns.RR_Header{
-					Name:   fqdn,
-					Rrtype: dns.TypeA,
-					Class:  dns.ClassINET | cacheFlushBit,
-					Ttl:    uintTTL,
-				},
-				A: v4,
-			})
-		} else {
-			records = append(records, &dns.AAAA{
-				Hdr: dns.RR_Header{
-					Name:   fqdn,
-					Rrtype: dns.TypeAAAA,
-					Class:  dns.ClassINET | cacheFlushBit,
-					Ttl:    uintTTL,
-				},
-				AAAA: ip,
-			})
-		}
-	}
+	records := recordsForIPs(fqdn, ips, uint32(*ttl))
 	if len(records) == 0 {
 		log.Fatalf("no usable global unicast addresses on %s", *ifaceName)
 	}
@@ -389,7 +420,7 @@ func main() {
 
 	zone := &hostnameZone{
 		records: records,
-		nsec:    buildNSEC(fqdn, records, uintTTL),
+		nsec:    buildNSEC(fqdn, records, uint32(*ttl)),
 	}
 
 	server, err := newMDNSServer(zone, socks, fqdn)
@@ -413,17 +444,34 @@ func main() {
 		runAnnounce(server, records)
 	}
 
+	addrWatchDone := make(chan struct{})
+	addrWatchStopped := make(chan struct{})
+	go func() {
+		defer close(addrWatchStopped)
+		watchInterfaceAddresses(
+			server,
+			attrs.Index,
+			fqdn,
+			uint32(*ttl),
+			addrWatchDone,
+			!*skipAnnounce,
+			!*skipGoodbye,
+		)
+	}()
+
 	log.Printf("server running; waiting for signal")
 
 	// Wait for signal.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigCh
+	close(addrWatchDone)
+	<-addrWatchStopped
 	log.Printf("received %s", sig)
 
 	// RFC 6762 §10.1: Goodbye.
 	if !*skipGoodbye {
-		runGoodbye(server, records)
+		runGoodbye(server, server.zone.snapshotRecords())
 	}
 
 	// Stop server, then shut down.
@@ -431,6 +479,37 @@ func main() {
 		log.Printf("server shutdown: %v", err)
 	}
 	log.Printf("shutting down")
+}
+
+func recordsForIPs(name string, ips []net.IP, ttl uint32) []dns.RR {
+	var records []dns.RR
+	for _, ip := range ips {
+		if ip == nil || ip.IsLinkLocalUnicast() || ip.IsLoopback() {
+			continue
+		}
+		if v4 := ip.To4(); v4 != nil {
+			records = append(records, &dns.A{
+				Hdr: dns.RR_Header{
+					Name:   name,
+					Rrtype: dns.TypeA,
+					Class:  dns.ClassINET | cacheFlushBit,
+					Ttl:    ttl,
+				},
+				A: v4,
+			})
+		} else {
+			records = append(records, &dns.AAAA{
+				Hdr: dns.RR_Header{
+					Name:   name,
+					Rrtype: dns.TypeAAAA,
+					Class:  dns.ClassINET | cacheFlushBit,
+					Ttl:    ttl,
+				},
+				AAAA: ip,
+			})
+		}
+	}
+	return records
 }
 
 // getInterfaceIPs returns the IP addresses of link using vishvananda/netlink.
@@ -453,6 +532,63 @@ func getInterfaceIPs(link netlink.Link) ([]net.IP, error) {
 		ips = append(ips, a.IPNet.IP)
 	}
 	return ips, nil
+}
+
+// watchInterfaceAddresses refreshes the advertised A/AAAA records whenever
+// the selected link gains or loses an address.  The sockets remain attached to
+// the interface; only the records need to be replaced.
+func watchInterfaceAddresses(
+	server *mdnsServer,
+	linkIndex int,
+	fqdn string,
+	ttl uint32,
+	done <-chan struct{},
+	sendAnnounce bool,
+	sendGoodbye bool,
+) {
+	updates := make(chan netlink.AddrUpdate, 1)
+	if err := netlink.AddrSubscribe(updates, done); err != nil {
+		log.Printf("WARN: subscribe to interface address changes: %v", err)
+		return
+	}
+
+	for {
+		select {
+		case <-done:
+			return
+		case update, ok := <-updates:
+			if !ok {
+				return
+			}
+			if update.LinkIndex != linkIndex {
+				continue
+			}
+
+			link, err := netlink.LinkByIndex(linkIndex)
+			if err != nil {
+				log.Printf("WARN: look up interface %d after address change: %v", linkIndex, err)
+				continue
+			}
+			ips, err := getInterfaceIPs(link)
+			if err != nil {
+				log.Printf("WARN: read addresses for %s after address change: %v", link.Attrs().Name, err)
+				continue
+			}
+			records := recordsForIPs(fqdn, ips, ttl)
+			oldRecords, changed := server.zone.replaceRecords(records, buildNSEC(fqdn, records, ttl))
+			if !changed {
+				continue
+			}
+
+			log.Printf("interface %s addresses changed; now publishing %d record(s)", link.Attrs().Name, len(records))
+			if sendGoodbye && len(oldRecords) > 0 {
+				runGoodbye(server, oldRecords)
+			}
+			if sendAnnounce && len(records) > 0 {
+				runAnnounce(server, records)
+			}
+		}
+	}
 }
 
 // mdnsSockets holds the per-family UDP sockets used for mDNS.
@@ -668,8 +804,7 @@ func (s *mdnsServer) handleProbeTiebreak(msg *dns.Msg) {
 // differing record decides, and if one list is a prefix of the other, the
 // longer list wins.
 func (s *mdnsServer) theyWinTiebreak(their []dns.RR) bool {
-	our := make([]dns.RR, len(s.zone.records))
-	copy(our, s.zone.records)
+	our := s.zone.snapshotRecords()
 	sort.Slice(our, func(i, j int) bool { return rrLess(our[i], our[j]) })
 
 	sortedTheir := make([]dns.RR, len(their))
