@@ -338,7 +338,7 @@
         "netbios name" = "NIXOS";
         "security" = "user";
         "hosts allow" = "all";
-        "invalid users" = "";
+        "invalid users" = lib.mkForce [ ];
         "guest account" = "nobody";
         "map to guest" = "never";
         "unix password sync" = "yes";
