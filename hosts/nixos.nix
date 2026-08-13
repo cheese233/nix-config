@@ -337,8 +337,7 @@
         "server string" = "nixos";
         "netbios name" = "NIXOS";
         "security" = "user";
-        "hosts allow" = "fdea:d:beef::/48 127.0.0.1 localhost";
-        "hosts deny" = "0.0.0.0/0";
+        "hosts allow" = "all";
         "guest account" = "nobody";
         "map to guest" = "never";
         "unix password sync" = "yes";
