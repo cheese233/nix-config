@@ -100,124 +100,134 @@ let
   '';
 in
 {
-  services.nginx.virtualHosts."ariang" = {
-    onlySSL = lib.mkForce false;
-    addSSL = lib.mkForce false;
-    listen = [ { addr = "[::]"; port = 8600; } ];
-    root = "${pkgs.ariang}/share/ariang";
-    extraConfig = ''
-      sub_filter '</head>'
-        '<script>
-           try {
-             var _orig = localStorage.setItem;
-             localStorage.setItem = function(k,v) {
-               if (k === "AriaNg.Options") {
-                 try {
-                   var o = JSON.parse(v);
-                   o.rpcHost = "aria2.local";
-                   o.rpcPort = "6800";
-                   o.secret = "${aria2RpcSecretB64}";
-                   v = JSON.stringify(o);
-                 } catch(e) {}
-               }
-               _orig.call(localStorage, k, v);
-             };
-           } catch(e) {}
-         </script></head>';
-      sub_filter_once on;
-      sub_filter_types text/html;
-    '';
+  options.networking.aria2-netns = lib.mkOption {
+    type = lib.types.str;
+    internal = true;
+    description = "Podman --network argument for the aria2 container netns";
   };
 
-  networking.nftables.firewall.rules = {
-    lan-to-fw-ariang = {
-      from = [ "lan" ];
-      to = [ "fw" ];
-      allowedTCPPorts = [ 8600 ];
+  config = {
+    networking.aria2-netns = veth.arg;
+
+    services.nginx.virtualHosts."ariang" = {
+      onlySSL = lib.mkForce false;
+      addSSL = lib.mkForce false;
+      listen = [ { addr = "[::]"; port = 8600; } ];
+      root = "${pkgs.ariang}/share/ariang";
+      extraConfig = ''
+        sub_filter '</head>'
+          '<script>
+             try {
+               var _orig = localStorage.setItem;
+               localStorage.setItem = function(k,v) {
+                 if (k === "AriaNg.Options") {
+                   try {
+                     var o = JSON.parse(v);
+                     o.rpcHost = "aria2.local";
+                     o.rpcPort = "6800";
+                     o.secret = "${aria2RpcSecretB64}";
+                     v = JSON.stringify(o);
+                   } catch(e) {}
+                 }
+                 _orig.call(localStorage, k, v);
+               };
+             } catch(e) {}
+           </script></head>';
+        sub_filter_once on;
+        sub_filter_types text/html;
+      '';
     };
-    wan-to-lan-aria2-dht = {
-      from = [ "wan" ];
-      to = [ "lan" ];
-      allowedTCPPorts = [ 33888 ];
-      allowedUDPPorts = [ 33888 ];
-    };
-  };
 
-  networking.nftables.firewall.zones.lan.interfaces = [ "br-aria2" ];
-
-  networking.nftables.chains.postrouting.aria2-masq = {
-    after = [ "generated" ];
-    rules = [
-      "ip saddr ${aria2IPv4} oifname \"ppp0\" masquerade"
-    ];
-  };
-
-  networking.nftables.chains.prerouting.aria2-dnat = {
-    after = [ "generated" ];
-    rules = [
-      "meta l4proto { tcp, udp } th dport 33888 dnat ip to ${aria2IPv4} comment \"Forward BT to aria2\""
-    ];
-  };
-
-  networking.bridges.br-aria2 = {};
-  networking.interfaces.br-aria2.ipv4.addresses = [
-    { address = lanIPv4; prefixLength = 24; }
-  ];
-
-  systemd.services = veth.services // {
-    aria2-ipv4 = {
-      description = "Move veth into aria2 netns + assign IPv4";
-      after       = [ "podman-veth-aria2.service" ];
-      requires    = [ "podman-veth-aria2.service" ];
-      wantedBy    = [ "multi-user.target" ];
-      path = [ pkgs.iproute2 ];
-      serviceConfig = {
-        Type            = "oneshot";
-        RemainAfterExit = true;
-        ExecStart       = "${aria2IPv4Setup}";
-        ExecStop        = "${aria2IPv4Teardown}";
+    networking.nftables.firewall.rules = {
+      lan-to-fw-ariang = {
+        from = [ "lan" ];
+        to = [ "fw" ];
+        allowedTCPPorts = [ 8600 ];
+      };
+      wan-to-lan-aria2-dht = {
+        from = [ "wan" ];
+        to = [ "lan" ];
+        allowedTCPPorts = [ 33888 ];
+        allowedUDPPorts = [ 33888 ];
       };
     };
-    "${config.virtualisation.oci-containers.containers.aria2.serviceName}" = {
-      serviceConfig.StateDirectory = "aria2";
-      after = [ "podman-veth-aria2.service" "aria2-ipv4.service" ];
-      requires = [ "podman-veth-aria2.service" ];
-    };
-  };
 
-  systemd.tmpfiles.rules = [
-    "d /var/lib/aria2/downloads 0775 root root -"
-    "d /var/lib/aria2/config    0755 root root -"
-    "f /var/lib/aria2/config/aria2.session 0644 root root -"
-  ];
+    networking.nftables.firewall.zones.lan.interfaces = [ "br-aria2" ];
 
-  virtualisation.oci-containers.containers.aria2 = {
-    image = "aria2-next:latest";
-    imageStream = aria2NextImage;
-    autoStart = true;
-
-    volumes = [
-      "/var/lib/aria2/downloads:/downloads"
-      "/var/lib/aria2/config:/config"
-      "${aria2Conf}:/config/aria2.conf"
-    ];
-
-    environment = {
-      SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+    networking.nftables.chains.postrouting.aria2-masq = {
+      after = [ "generated" ];
+      rules = [
+        "ip saddr ${aria2IPv4} oifname \"ppp0\" masquerade"
+      ];
     };
 
-    extraOptions = [
-      "--network=${veth.arg}"
-      "--hostname=aria2"
-      "--tmpfs=/tmp"
-      "--cap-drop=ALL"
-      "--cap-add=NET_ADMIN"
-      "--cap-add=MKNOD"
-      "--security-opt=no-new-privileges:true"
-      "--dns=fdea:d:beef::1"
-      "--sysctl=net.ipv6.conf.all.forwarding=1"
-      "--sysctl=net.ipv6.conf.all.accept_ra=2"
-      "--sysctl=net.ipv6.conf.eth0.accept_ra=2"
+    networking.nftables.chains.prerouting.aria2-dnat = {
+      after = [ "generated" ];
+      rules = [
+        "meta l4proto { tcp, udp } th dport 33888 dnat ip to ${aria2IPv4} comment \"Forward BT to aria2\""
+      ];
+    };
+
+    networking.bridges.br-aria2 = {};
+    networking.interfaces.br-aria2.ipv4.addresses = [
+      { address = lanIPv4; prefixLength = 24; }
     ];
+
+    systemd.services = veth.services // {
+      aria2-ipv4 = {
+        description = "Move veth into aria2 netns + assign IPv4";
+        after       = [ "podman-veth-aria2.service" ];
+        requires    = [ "podman-veth-aria2.service" ];
+        wantedBy    = [ "multi-user.target" ];
+        path = [ pkgs.iproute2 ];
+        serviceConfig = {
+          Type            = "oneshot";
+          RemainAfterExit = true;
+          ExecStart       = "${aria2IPv4Setup}";
+          ExecStop        = "${aria2IPv4Teardown}";
+        };
+      };
+      "${config.virtualisation.oci-containers.containers.aria2.serviceName}" = {
+        serviceConfig.StateDirectory = "aria2";
+        after = [ "podman-veth-aria2.service" "aria2-ipv4.service" ];
+        requires = [ "podman-veth-aria2.service" ];
+      };
+    };
+
+    systemd.tmpfiles.rules = [
+      "d /var/lib/aria2/downloads 0775 root root -"
+      "d /var/lib/aria2/config    0755 root root -"
+      "f /var/lib/aria2/config/aria2.session 0644 root root -"
+    ];
+
+    virtualisation.oci-containers.containers.aria2 = {
+      image = "aria2-next:latest";
+      imageStream = aria2NextImage;
+      autoStart = true;
+
+      volumes = [
+        "/var/lib/aria2/downloads:/downloads"
+        "/var/lib/aria2/config:/config"
+        "${aria2Conf}:/config/aria2.conf"
+      ];
+
+      environment = {
+        SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+      };
+
+      extraOptions = [
+        "--network=${veth.arg}"
+        "--hostname=aria2"
+        "--tmpfs=/tmp"
+        "--cap-drop=ALL"
+        "--cap-add=NET_ADMIN"
+        "--cap-add=MKNOD"
+        "--security-opt=no-new-privileges:true"
+        "--dns=fdea:d:beef::1"
+        "--sysctl=net.ipv6.conf.all.forwarding=1"
+        "--sysctl=net.ipv6.conf.all.accept_ra=2"
+        "--sysctl=net.ipv6.conf.eth0.accept_ra=2"
+      ];
+    };
   };
 }
