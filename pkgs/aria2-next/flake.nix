@@ -17,13 +17,13 @@
         rec {
           aria2-next = stdenv.mkDerivation rec {
             pname = "aria2-next";
-            version = "2.5.2";
+            version = "2.5.5";
 
             src = pkgs.fetchFromGitHub {
               owner = "AnInsomniacy";
               repo = "aria2-next";
               rev = "v${version}";
-              hash = "sha256-1QcdgU03qTk1yovTYv4udMA6TKKZEWPEXOCtlIdNhZw=";
+              hash = "sha256-+fJ+kl8FaZXmQJN/ozPzjuGejBIrvvXFC0GSxzTW2Q8=";
             };
 
             patches = [

@@ -338,6 +338,7 @@
         "netbios name" = "NIXOS";
         "security" = "user";
         "hosts allow" = "all";
+        "invalid users" = "";
         "guest account" = "nobody";
         "map to guest" = "never";
         "unix password sync" = "yes";
