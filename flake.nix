@@ -3,7 +3,10 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     agenix = { url = "github:ryantm/agenix"; inputs.nixpkgs.follows = "nixpkgs"; };
     nnf.url = "github:thelegy/nixos-nftables-firewall";
-    dae.url = "github:daeuniverse/flake.nix";
+    honk = {
+      url = "./pkgs/honk";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     dnsmasq-china-list = {
       url = "./pkgs/dnsmasq-china-list";
       inputs.nixpkgs.follows = "nixpkgs";

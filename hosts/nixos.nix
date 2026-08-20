@@ -11,7 +11,7 @@
     ../modules/containers-suwayomi.nix
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
-    inputs.dae.nixosModules.dae
+    inputs.honk.nixosModules.default
     inputs.avahi2dns.nixosModules.default
     inputs.microdoh3.nixosModules.default
     inputs.dibbler.nixosModules.default
@@ -65,9 +65,9 @@
       file = ../secrets/ppp-name.age;
       path = "/etc/ppp/name";
     };
-    secrets.dae-sub = {
+    secrets.honk-sub = {
       file = ../secrets/dae-sub.age;
-      path = "/etc/dae/local.sub";
+      path = "/etc/honk/local.sub";
     };
     secrets.awg-key = {
       file = ../secrets/awg-key.age;
@@ -442,10 +442,10 @@
   };
 
 
-  # ==================== DAE ====================
-  services.dae = {
+  # ==================== HONK ====================
+  services.honk = {
     enable = true;
-    package = inputs.dae.packages.x86_64-linux.dae-unstable;
+    package = inputs.honk.packages.x86_64-linux.default;
     assets = with pkgs; [
       v2ray-geoip
       (inputs.v2ray-rules-dat.packages.x86_64-linux.default)
@@ -459,6 +459,7 @@
         tproxy_port: 10800
         wan_interface: ppp0 # Use "auto" to auto detect WAN interface.
         lan_interface: br-lan, awg0
+        data_dir: '/var/lib/honk'
 
         log_level: info
         allow_insecure: false
@@ -467,7 +468,7 @@
       }
 
       subscription {
-        'file://local.sub'
+        local: 'file:///etc/honk/local.sub'
       }
 
       group {
@@ -516,18 +517,18 @@
     '';
   };
 
-  environment.etc."systemd/journald@dae.conf".text = ''
+  environment.etc."systemd/journald@honk.conf".text = ''
     [Journal]
     Storage=volatile
     RuntimeMaxFileSize=5M
     RuntimeMaxFiles=3
   '';
-  systemd.services.dae = {
+  systemd.services.honk = {
     after = [ "wg-quick-awg0.service" ];
     wants = [ "wg-quick-awg0.service" ];
   };
-  systemd.services.dae.serviceConfig.Restart = "on-failure";
-  systemd.services.dae.serviceConfig.LogNamespace = "dae";
+  systemd.services.honk.serviceConfig.Restart = "on-failure";
+  systemd.services.honk.serviceConfig.LogNamespace = "honk";
 
   services.amneziawg.interfaces.awg0 = {
     address = [ "fdea:d:beef:7767::1/64" ];

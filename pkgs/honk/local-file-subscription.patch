@@ -1,0 +1,125 @@
+diff --git a/crates/honk-core/Cargo.toml b/crates/honk-core/Cargo.toml
+index 6675866..5e7ce43 100644
+--- a/crates/honk-core/Cargo.toml
++++ b/crates/honk-core/Cargo.toml
+@@ -84,6 +84,7 @@ uuid.workspace = true
+ regex.workspace = true
+ ipnet.workspace = true
+ rand.workspace = true
++url.workspace = true
+ lru.workspace = true
+ libc.workspace = true
+ parking_lot.workspace = true
+diff --git a/crates/honk-core/src/subscription.rs b/crates/honk-core/src/subscription.rs
+index e48a0ba..f52bf02 100644
+--- a/crates/honk-core/src/subscription.rs
++++ b/crates/honk-core/src/subscription.rs
+@@ -14,6 +14,7 @@ use anyhow::Context as _;
+ use honk_config::node::Node;
+ use honk_config::subscription::Subscription;
+ use honk_config::types::{NodeProtocol, SubscriptionType};
++use url::Url;
+ use sha2::{Digest as _, Sha256};
+ 
+ /// reqwest DNS resolver backed by honk's bootstrap resolver
+@@ -211,6 +211,36 @@ pub struct SubscriptionManager {
+     client: reqwest::Client,
+ }
+ 
++fn local_file_path(subscription_url: &str) -> anyhow::Result<Option<PathBuf>> {
++    let url = Url::parse(subscription_url)
++        .with_context(|| format!("invalid subscription URL '{}'; expected a URL", subscription_url))?;
++    if url.scheme() != "file" {
++        return Ok(None);
++    }
++
++    anyhow::ensure!(
++        url.username().is_empty()
++            && url.password().is_none()
++            && url.query().is_none()
++            && url.fragment().is_none(),
++        "file subscription URL must not contain credentials, a query, or a fragment"
++    );
++
++    // Accept the standard absolute form and dae's legacy `file://relative`
++    // form. Remote file authorities are deliberately not supported.
++    if let Some(host) = url.host_str()
++        && host != "localhost"
++        && url.path().is_empty()
++    {
++        return Ok(Some(PathBuf::from(host)));
++    }
++
++    let path = url
++        .to_file_path()
++        .map_err(|()| anyhow::anyhow!("invalid local file subscription URL '{subscription_url}'"))?;
++    Ok(Some(path))
++}
++
+ impl SubscriptionManager {
+     pub fn new() -> anyhow::Result<Self> {
+         let client = reqwest::Client::builder()
+             .timeout(std::time::Duration::from_secs(30))
+             .dns_resolver(std::sync::Arc::new(BootstrapDnsResolve))
+             .build()?;
+         Ok(Self { client })
+     }
+ 
+     /// Fetch a subscription URL and parse its contents into a list of nodes.
+     pub async fn fetch(&self, sub: &Subscription) -> anyhow::Result<Vec<Node>> {
+         self.fetch_and_store(sub, None).await
+     }
+ 
+     pub async fn fetch_and_store(
+         &self,
+@@ -230,6 +260,24 @@ impl SubscriptionManager {
+         sub: &Subscription,
+         store: Option<&SubscriptionStore>,
+     ) -> anyhow::Result<Vec<Node>> {
++        if let Some(path) = local_file_path(&sub.url)? {
++            let read_path = path.clone();
++            let content = tokio::task::spawn_blocking(move || fs::read_to_string(&read_path))
++                .await?
++                .with_context(|| format!("read local subscription '{}'", path.display()))?;
++            let nodes = parse_subscription_content(sub, &content)?;
++            if let Some(store) = store
++                && let Err(error) = store.store_content(sub, content).await
++            {
++                tracing::warn!(
++                    subscription = %sub.name,
++                    %error,
++                    "failed to persist subscription"
++                );
++            }
++            return Ok(nodes);
++        }
++
+         let mut request = self.client.get(&sub.url);
+ 
+         if let Some(ref ua) = sub.user_agent {
+@@ -1212,6 +1260,20 @@ not-proxies: []
+         assert!(!format!("{error:?}").contains(SENTINEL));
+     }
+ 
++    #[tokio::test]
++    async fn fetch_local_file_subscription() {
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("subscription.sub");
++        fs::write(&path, "socks5://127.0.0.1:1080#local").unwrap();
++        let subscription = Subscription {
++            name: "local".into(),
++            url: Url::from_file_path(&path).unwrap().to_string(),
++            ..Subscription::default()
++        };
++
++        let nodes = SubscriptionManager::new()
++            .unwrap()
++            .fetch(&subscription)
++            .await
++            .unwrap();
++        assert_eq!(nodes.len(), 1);
++        assert_eq!(nodes[0].name, "local");
++    }
++
+     #[tokio::test]
+     async fn subscription_store_recovers_last_valid_fetch() {
