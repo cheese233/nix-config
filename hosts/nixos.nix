@@ -443,7 +443,7 @@
 
 
   # ==================== HONK ====================
-  services.honk = {
+  network.honk = {
     enable = true;
     package = inputs.honk.packages.x86_64-linux.default;
     assets = with pkgs; [

@@ -121,7 +121,7 @@
 
       nixosModules.default = { config, lib, pkgs, ... }:
         let
-          cfg = config.services.honk;
+          cfg = config.network.honk;
           genAssetsDrv = paths: pkgs.symlinkJoin {
             name = "honk-assets";
             inherit paths;
@@ -129,9 +129,7 @@
           configPath = if cfg.config != null then "/etc/honk/config.dae" else cfg.configFile;
         in
         {
-          disabledModules = [ "services/web-apps/honk.nix" ];
-
-          options.services.honk = {
+          options.network.honk = {
             enable = lib.mkEnableOption "honk, an eBPF transparent proxy engine";
 
             package = lib.mkOption {
