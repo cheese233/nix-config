@@ -53,6 +53,8 @@
               substituteInPlace crates/honk-ebpf/.cargo/config.toml \
                 --replace-fail /root/.cargo/bin/bpf-linker-wrapper \
                 ${bpf-linker}/bin/bpf-linker
+              substituteInPlace crates/honk-ebpf/.cargo/config.toml \
+                --replace-fail 'bpf-stack-size=4096' 'bpf-stack-size=512'
             '';
 
             buildPhase = ''
