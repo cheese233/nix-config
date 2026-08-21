@@ -2,10 +2,12 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     agenix = { url = "github:ryantm/agenix"; inputs.nixpkgs.follows = "nixpkgs"; };
+    honk-rust-overlay = { url = "github:oxalica/rust-overlay"; inputs.nixpkgs.follows = "nixpkgs"; };
     nnf.url = "github:thelegy/nixos-nftables-firewall";
     honk = {
       url = "./pkgs/honk";
       inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "honk-rust-overlay";
     };
     dnsmasq-china-list = {
       url = "./pkgs/dnsmasq-china-list";

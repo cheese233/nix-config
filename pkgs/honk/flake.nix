@@ -2,8 +2,12 @@
   description = "honk, an eBPF transparent proxy engine";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+  inputs.rust-overlay = {
+    url = "github:oxalica/rust-overlay";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, rust-overlay }:
     let
       supportedSystems = [ "x86_64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
@@ -14,7 +18,13 @@
     {
       packages = forAllSystems (system:
         let
-          pkgs = nixpkgs.legacyPackages.${system};
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ (import rust-overlay) ];
+          };
+          rustNightly = pkgs.rust-bin.nightly."2026-07-20".default.override {
+            extensions = [ "rust-src" ];
+          };
           bpf-linker = pkgs.stdenv.mkDerivation {
             pname = "bpf-linker";
             version = "0.10.3";
@@ -43,10 +53,9 @@
             cargoRoot = "crates/honk-ebpf";
             cargoLock.lockFile = "${src}/crates/honk-ebpf/Cargo.lock";
 
-            nativeBuildInputs = [ bpf-linker ];
+            nativeBuildInputs = [ bpf-linker rustNightly ];
             env = {
-              RUSTC_BOOTSTRAP = "1";
-              RUST_SRC_PATH = "${pkgs.rustPlatform.rustcSrc}";
+              RUST_SRC_PATH = "${rustNightly}/lib/rustlib/src/rust";
             };
 
             postPatch = ''
@@ -60,18 +69,27 @@
             buildPhase = ''
               runHook preBuild
               vendor_dir=$(find "$NIX_BUILD_TOP" -type d -name cargo-vendor-dir -print -quit)
+              rustc_sysroot=$(${rustNightly}/bin/rustc --print sysroot)
               for crate in ${pkgs.rustPlatform.rustVendorSrc}/*; do
                 crate_name=$(basename "$crate")
                 if [ ! -e "$vendor_dir/$crate_name" ]; then
                   ln -s "$crate" "$vendor_dir/$crate_name"
                 fi
               done
-              rustc_sysroot=$(rustc --print sysroot)
+              for crate in "$rustc_sysroot/lib/rustlib/src/rust/library/vendor"/*; do
+                crate_name=$(basename "$crate")
+                if [ ! -e "$vendor_dir/$crate_name" ]; then
+                  ln -s "$crate" "$vendor_dir/$crate_name"
+                fi
+              done
               build_sysroot="$TMPDIR/honk-rust-sysroot"
+              mkdir -p "$build_sysroot/lib/rustlib"
+              for entry in "$rustc_sysroot/lib/rustlib"/*; do
+                [ "$(basename "$entry")" = src ] || cp -rs "$entry" "$build_sysroot/lib/rustlib/"
+              done
               mkdir -p "$build_sysroot/lib/rustlib/src"
-              cp -rs "$rustc_sysroot/lib/rustlib/." "$build_sysroot/lib/rustlib/"
-              ln -s ${pkgs.rustPlatform.rustcSrc} "$build_sysroot/lib/rustlib/src/rust"
-              real_rustc=$(command -v rustc)
+              ln -s "$rustc_sysroot/lib/rustlib/src/rust" "$build_sysroot/lib/rustlib/src/rust"
+              real_rustc=${rustNightly}/bin/rustc
               cat > "$TMPDIR/honk-rustc" <<EOF
               #!/bin/sh
               exec "$real_rustc" --sysroot "$build_sysroot" "\$@"
@@ -79,7 +97,7 @@
               chmod +x "$TMPDIR/honk-rustc"
               export RUSTC="$TMPDIR/honk-rustc"
               cd crates/honk-ebpf
-              cargo build --release --offline -Zbuild-std=core --target bpfel-unknown-none
+              ${rustNightly}/bin/cargo build --release --offline -Zbuild-std=core --target bpfel-unknown-none
               runHook postBuild
             '';
 
