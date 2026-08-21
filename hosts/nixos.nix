@@ -499,6 +499,7 @@
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
         pname(unbound) -> must_rules
+        pname(microdoh3) -> direct
 
         dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
 
