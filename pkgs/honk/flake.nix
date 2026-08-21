@@ -5,7 +5,7 @@
 
   outputs = { self, nixpkgs }:
     let
-      supportedSystems = [ "x86_64-linux" "aarch64-linux" ];
+      supportedSystems = [ "x86_64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
       version = "0.0.1-alpha";
       rev = "d66c702e871c9cde78ceec7c374129ac48c239b3";
@@ -15,6 +15,21 @@
       packages = forAllSystems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
+          bpf-linker = pkgs.stdenv.mkDerivation {
+            pname = "bpf-linker";
+            version = "0.10.3";
+            src = pkgs.fetchurl {
+              url = "https://github.com/aya-rs/bpf-linker/releases/download/v0.10.3/bpf-linker-x86_64-unknown-linux-musl.tar.gz";
+              hash = "sha256-D6RkXS37tcr+YjGwqp+tTxQwvQhx471zGegtgnv2Jiw=";
+            };
+            dontConfigure = true;
+            dontBuild = true;
+            dontUnpack = true;
+            installPhase = ''
+              tar -xzf "$src"
+              install -Dm755 bpf-linker $out/bin/bpf-linker
+            '';
+          };
           src = pkgs.fetchFromGitHub {
             owner = "daeuniverse";
             repo = "honk";
@@ -28,7 +43,7 @@
             cargoRoot = "crates/honk-ebpf";
             cargoLock.lockFile = "${src}/crates/honk-ebpf/Cargo.lock";
 
-            nativeBuildInputs = [ pkgs.bpf-linker ];
+            nativeBuildInputs = [ bpf-linker ];
             env = {
               RUSTC_BOOTSTRAP = "1";
               RUST_SRC_PATH = "${pkgs.rustPlatform.rustcSrc}";
@@ -37,11 +52,18 @@
             postPatch = ''
               substituteInPlace crates/honk-ebpf/.cargo/config.toml \
                 --replace-fail /root/.cargo/bin/bpf-linker-wrapper \
-                ${pkgs.bpf-linker}/bin/bpf-linker
+                ${bpf-linker}/bin/bpf-linker
             '';
 
             buildPhase = ''
               runHook preBuild
+              vendor_dir=$(find "$NIX_BUILD_TOP" -type d -name cargo-vendor-dir -print -quit)
+              for crate in ${pkgs.rustPlatform.rustVendorSrc}/*; do
+                crate_name=$(basename "$crate")
+                if [ ! -e "$vendor_dir/$crate_name" ]; then
+                  ln -s "$crate" "$vendor_dir/$crate_name"
+                fi
+              done
               rustc_sysroot=$(rustc --print sysroot)
               build_sysroot="$TMPDIR/honk-rust-sysroot"
               mkdir -p "$build_sysroot/lib/rustlib/src"
@@ -54,13 +76,6 @@
               EOF
               chmod +x "$TMPDIR/honk-rustc"
               export RUSTC="$TMPDIR/honk-rustc"
-              vendor_dir=$(find "$NIX_BUILD_TOP" -type d -name cargo-vendor-dir -print -quit)
-              for crate in ${pkgs.rustPlatform.rustVendorSrc}/*; do
-                crate_name=$(basename "$crate")
-                if [ ! -e "$vendor_dir/$crate_name" ]; then
-                  ln -s "$crate" "$vendor_dir/$crate_name"
-                fi
-              done
               cd crates/honk-ebpf
               cargo build --release --offline -Zbuild-std=core --target bpfel-unknown-none
               runHook postBuild
