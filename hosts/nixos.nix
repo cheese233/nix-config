@@ -458,7 +458,9 @@
       global {
         tproxy_port: 10800
         wan_interface: ppp0 # Use "auto" to auto detect WAN interface.
-        lan_interface: br-lan, awg0
+        # nat64 (tayga) is attached as a LAN interface so post-translation
+        # IPv4 packets are routed by honk; see the 64:ff9b::/96 rule below.
+        lan_interface: br-lan, awg0, nat64
         data_dir: '/var/lib/honk'
 
         log_level: info
@@ -498,6 +500,10 @@
         pname(NetworkManager) -> direct
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
+        # DNS64/NAT64 destinations must bypass the proxy entirely so they
+        # reach tayga untranslated; the translated IPv4 side is intercepted
+        # on the nat64 interface instead.
+        dip('64:ff9b::/96') -> direct
         pname(unbound) -> must_rules
         pname(microdoh3) -> direct
 
@@ -532,8 +538,8 @@
     RuntimeMaxFiles=3
   '';
   systemd.services.honk = {
-    after = [ "wg-quick-awg0.service" ];
-    wants = [ "wg-quick-awg0.service" ];
+    after = [ "wg-quick-awg0.service" "tayga.service" ];
+    wants = [ "wg-quick-awg0.service" "tayga.service" ];
   };
   systemd.services.honk.serviceConfig.Restart = "on-failure";
   systemd.services.honk.serviceConfig.LogNamespace = "honk";
