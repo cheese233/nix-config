@@ -499,7 +499,6 @@
         dip(224.0.0.0/3, 'ff00::/8') -> direct
         dip(geoip:private) -> direct
         pname(unbound) -> must_rules
-        pname(microdoh3) -> must_rules
 
         dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
 
@@ -513,6 +512,14 @@
         domain(geosite: openai, geosite: anthropic, geosite: xai, geosite: google-gemini) -> resident
 
         fallback: proxy
+      }
+      experimental {
+        clash_api {
+          external_controller: '[::]:9091'
+        }
+        udp_nfqueue {
+            enabled: true
+        }
       }
     '';
   };
