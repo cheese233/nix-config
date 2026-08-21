@@ -1,8 +1,7 @@
-diff --git a/crates/honk-core/Cargo.toml b/crates/honk-core/Cargo.toml
-index 6675866..5e7ce43 100644
---- a/crates/honk-core/Cargo.toml
-+++ b/crates/honk-core/Cargo.toml
-@@ -84,6 +84,7 @@ uuid.workspace = true
+diff -Naur a/crates/honk-core/Cargo.toml b/crates/honk-core/Cargo.toml
+--- a/crates/honk-core/Cargo.toml	2026-08-21 21:12:14.327896820 +0800
++++ b/crates/honk-core/Cargo.toml	2026-08-21 21:13:30.824507628 +0800
+@@ -84,6 +84,7 @@
  regex.workspace = true
  ipnet.workspace = true
  rand.workspace = true
@@ -10,19 +9,18 @@ index 6675866..5e7ce43 100644
  lru.workspace = true
  libc.workspace = true
  parking_lot.workspace = true
-diff --git a/crates/honk-core/src/subscription.rs b/crates/honk-core/src/subscription.rs
-index e48a0ba..f52bf02 100644
---- a/crates/honk-core/src/subscription.rs
-+++ b/crates/honk-core/src/subscription.rs
-@@ -14,6 +14,7 @@ use anyhow::Context as _;
- use honk_config::node::Node;
+diff -Naur a/crates/honk-core/src/subscription.rs b/crates/honk-core/src/subscription.rs
+--- a/crates/honk-core/src/subscription.rs	2026-08-21 21:12:14.336771196 +0800
++++ b/crates/honk-core/src/subscription.rs	2026-08-21 21:13:49.623506651 +0800
+@@ -15,6 +15,7 @@
  use honk_config::subscription::Subscription;
  use honk_config::types::{NodeProtocol, SubscriptionType};
-+use url::Url;
  use sha2::{Digest as _, Sha256};
++use url::Url;
  
  /// reqwest DNS resolver backed by honk's bootstrap resolver
-@@ -211,6 +211,36 @@ pub struct SubscriptionManager {
+ /// (bypass-marked UDP/TCP), so subscription fetches do not depend on the
+@@ -211,6 +212,36 @@
      client: reqwest::Client,
  }
  
@@ -59,20 +57,7 @@ index e48a0ba..f52bf02 100644
  impl SubscriptionManager {
      pub fn new() -> anyhow::Result<Self> {
          let client = reqwest::Client::builder()
-             .timeout(std::time::Duration::from_secs(30))
-             .dns_resolver(std::sync::Arc::new(BootstrapDnsResolve))
-             .build()?;
-         Ok(Self { client })
-     }
- 
-     /// Fetch a subscription URL and parse its contents into a list of nodes.
-     pub async fn fetch(&self, sub: &Subscription) -> anyhow::Result<Vec<Node>> {
-         self.fetch_and_store(sub, None).await
-     }
- 
-     pub async fn fetch_and_store(
-         &self,
-@@ -230,6 +260,24 @@ impl SubscriptionManager {
+@@ -230,6 +261,24 @@
          sub: &Subscription,
          store: Option<&SubscriptionStore>,
      ) -> anyhow::Result<Vec<Node>> {
@@ -97,29 +82,3 @@ index e48a0ba..f52bf02 100644
          let mut request = self.client.get(&sub.url);
  
          if let Some(ref ua) = sub.user_agent {
-@@ -1212,6 +1260,20 @@ not-proxies: []
-         assert!(!format!("{error:?}").contains(SENTINEL));
-     }
- 
-+    #[tokio::test]
-+    async fn fetch_local_file_subscription() {
-+        let directory = tempfile::tempdir().unwrap();
-+        let path = directory.path().join("subscription.sub");
-+        fs::write(&path, "socks5://127.0.0.1:1080#local").unwrap();
-+        let subscription = Subscription {
-+            name: "local".into(),
-+            url: Url::from_file_path(&path).unwrap().to_string(),
-+            ..Subscription::default()
-+        };
-+
-+        let nodes = SubscriptionManager::new()
-+            .unwrap()
-+            .fetch(&subscription)
-+            .await
-+            .unwrap();
-+        assert_eq!(nodes.len(), 1);
-+        assert_eq!(nodes[0].name, "local");
-+    }
-+
-     #[tokio::test]
-     async fn subscription_store_recovers_last_valid_fetch() {

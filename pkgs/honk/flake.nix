@@ -135,6 +135,8 @@
               LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             };
 
+            patches = [ ./local-file-subscription.patch ];
+
             postPatch = ''
               cp ${honk-core-build} crates/honk-core/build.rs
             '';
