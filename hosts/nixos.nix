@@ -422,6 +422,8 @@
       lan-to-fw-dhcpv6 = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 547 ]; };
       lan-to-fw-ssh = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = config.services.openssh.ports; };
       lan-to-fw-cockpit = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = [ 9090 ]; };
+      # honk clash_api ([::]:9091)
+      lan-to-fw-clashapi = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = [ 9091 ]; };
       lan-to-fw-awg = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 47999 ]; };
       lan-to-fw-samba = { from = [ "lan" ]; to = [ "fw" ]; allowedTCPPorts = [ 139 445 ]; allowedUDPPorts = [ 137 138 ]; };
       lan-to-fw-wsdd = { from = [ "lan" ]; to = [ "fw" ]; allowedUDPPorts = [ 3702 ]; };
