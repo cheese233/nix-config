@@ -469,6 +469,7 @@
         allow_insecure: false
         auto_config_kernel_parameter: false
         dial_mode: domain++
+        tls_implementation: utls
       }
 
       subscription {
