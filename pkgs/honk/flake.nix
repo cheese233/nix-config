@@ -52,6 +52,7 @@
             inherit version src;
             cargoRoot = "crates/honk-ebpf";
             cargoLock.lockFile = "${src}/crates/honk-ebpf/Cargo.lock";
+            patches = [ ./lpm-map-size.patch ];
 
             nativeBuildInputs = [ bpf-linker rustNightly ];
             env = {
