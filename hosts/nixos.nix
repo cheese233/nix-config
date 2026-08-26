@@ -251,6 +251,12 @@
         rrset-cache-size = "256m";
         prefetch = true;
         prefetch-key = true;
+        # Optimistic caching: serve expired records while refreshing in the
+        # background so clients never see a cache miss latency spike.
+        serve-expired = true;
+        serve-expired-client-timeout = "5000";
+        serve-expired-ttl = "86400";
+        serve-expired-ttl-reset = false;
         do-not-query-localhost = false;
       };
       remote-control = {
