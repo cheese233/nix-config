@@ -216,6 +216,9 @@ in
 
       environment = {
         SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+        # The image has no /etc/passwd, so aria2-next's default state-dir
+        # resolution (HOME/.local/state) aborts before options are applied.
+        XDG_STATE_HOME = "/state";
       };
 
       extraOptions = [
