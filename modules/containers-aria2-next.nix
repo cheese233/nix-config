@@ -33,6 +33,7 @@ let
 
   aria2Conf = pkgs.writeText "aria2.conf" ''
     dir=/downloads
+    state-dir=/state
     continue=true
     check-integrity=true
 
@@ -197,6 +198,7 @@ in
     systemd.tmpfiles.rules = [
       "d /var/lib/aria2/downloads 0775 root root -"
       "d /var/lib/aria2/config    0755 root root -"
+      "d /var/lib/aria2/state     0755 root root -"
       "f /var/lib/aria2/config/aria2.session 0644 root root -"
     ];
 
@@ -208,6 +210,7 @@ in
       volumes = [
         "/var/lib/aria2/downloads:/downloads"
         "/var/lib/aria2/config:/config"
+        "/var/lib/aria2/state:/state"
         "${aria2Conf}:/config/aria2.conf"
       ];
 
