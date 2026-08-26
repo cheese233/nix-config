@@ -13,21 +13,67 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           stdenv = pkgs.stdenv;
-        in
-        rec {
+
+          aria2NextSrc = pkgs.fetchFromGitHub {
+            owner = "AnInsomniacy";
+            repo = "aria2-next";
+            rev = "v2.6.2";
+            hash = "sha256-OmLC0Mhm+MDwkCENO7cpSel2Oc3cTu9QBG7IxugFyGY=";
+          };
+
+          # Upstream requires libtorrent-rasterbar >= 2.1.1 while nixpkgs only
+          # ships 2.0.x; build the copy vendored inside the aria2-next tree.
+          libtorrent-rasterbar-vendored = stdenv.mkDerivation {
+            pname = "libtorrent-rasterbar";
+            version = "2.1.1";
+
+            src = aria2NextSrc + "/third_party/libtorrent";
+
+            nativeBuildInputs = with pkgs; [
+              cmake
+              ninja
+              pkg-config
+            ];
+
+            buildInputs = with pkgs; [
+              boost
+              openssl
+            ];
+
+            # The generated .pc file joins paths incorrectly and we consume
+            # this package via its CMake config anyway.
+            postInstall = ''
+              rm -rf $out/lib/pkgconfig
+            '';
+
+            cmakeFlags = [
+              "-DCMAKE_INSTALL_LIBDIR=lib"
+              "-DCMAKE_INSTALL_INCLUDEDIR=include"
+              # Upstream links libtorrent statically (its TORRENT_EXTRA_EXPORT
+              # symbols stay hidden in a shared build); mirror that here.
+              "-DBUILD_SHARED_LIBS=OFF"
+              "-Dstatic_runtime=OFF"
+              "-Ddeprecated-functions=OFF"
+              "-Dextensions=ON"
+              "-Dmutable-torrents=ON"
+              "-Dstreaming=ON"
+              "-Di2p=OFF"
+              "-Dwebtorrent=OFF"
+              "-Dlogging=OFF"
+              "-Dencryption=ON"
+              "-Ddht=ON"
+            ];
+          };
+
           aria2-next = stdenv.mkDerivation rec {
             pname = "aria2-next";
-            version = "2.5.5";
+            version = "2.6.2";
 
-            src = pkgs.fetchFromGitHub {
-              owner = "AnInsomniacy";
-              repo = "aria2-next";
-              rev = "v${version}";
-              hash = "sha256-+fJ+kl8FaZXmQJN/ozPzjuGejBIrvvXFC0GSxzTW2Q8=";
-            };
+            src = aria2NextSrc;
 
             patches = [
               ./private-network-access.patch
+              ./cmake-system-deps.patch
             ];
 
             nativeBuildInputs = with pkgs; [
@@ -38,24 +84,21 @@
 
             buildInputs = with pkgs; [
               openssl
-              c-ares
-              libssh2
-              sqlite
               zlib
               expat
+              sqlite
+              curl
+              nghttp2
+              boost
+              libtorrent-rasterbar-vendored
             ];
 
             cmakeFlags = [
-              "-DARIA2_ENABLE_SSL=ON"
+              "-DARIA2_SUPERBUILD=OFF"
               "-DARIA2_ENABLE_BITTORRENT=ON"
               "-DARIA2_ENABLE_METALINK=ON"
               "-DARIA2_ENABLE_WEBSOCKET=ON"
               "-DARIA2_ENABLE_EPOLL=ON"
-              "-DARIA2_WITH_OPENSSL=ON"
-              "-DARIA2_WITH_CARES=ON"
-              "-DARIA2_WITH_SQLITE3=ON"
-              "-DARIA2_WITH_LIBSSH2=ON"
-              "-DARIA2_WITH_EXPAT=ON"
             ];
 
             enableParallelBuilding = true;
@@ -72,13 +115,16 @@
               platforms = platforms.linux;
               longDescription = ''
                 Aria2 Next is an actively maintained aria2-compatible download engine
-                with extensive bug fixes, modernized CMake build system, and native
-                ED2K/eMule support. Compatible with existing aria2 CLI, configuration,
-                sessions, and JSON-RPC interfaces.
+                with extensive bug fixes and a modernized CMake build system.
+                HTTP/HTTPS/SFTP/Metalink transfers use libcurl + nghttp2 and
+                BitTorrent uses libtorrent-rasterbar. Compatible with existing
+                aria2 CLI, configuration, sessions, and JSON-RPC interfaces.
               '';
             };
           };
-
+        in
+        rec {
+          inherit aria2-next;
           default = aria2-next;
         }
       );

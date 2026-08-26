@@ -1,0 +1,187 @@
+--- a/cmake/modules/Options.cmake
++++ b/cmake/modules/Options.cmake
+@@ -27,10 +27,10 @@
+   message(FATAL_ERROR "WSLAY_VERSION is missing from packaging/dependencies.env")
+ endif()
+ 
+-if(NOT IS_DIRECTORY "${ARIA2_DEPENDENCY_ROOT}")
++if(ARIA2_DEPENDENCY_ROOT AND NOT IS_DIRECTORY "${ARIA2_DEPENDENCY_ROOT}")
+   message(FATAL_ERROR "ARIA2_DEPENDENCY_ROOT must reference the vendored dependency installation")
+ endif()
+-if(NOT IS_DIRECTORY "${ARIA2_BOOST_ROOT}/boost/asio")
++if(ARIA2_BOOST_ROOT AND NOT IS_DIRECTORY "${ARIA2_BOOST_ROOT}/boost/asio")
+   message(FATAL_ERROR "ARIA2_BOOST_ROOT must reference the vendored Boost source root")
+ endif()
+ 
+--- a/cmake/modules/Dependencies.cmake
++++ b/cmake/modules/Dependencies.cmake
+@@ -12,18 +12,27 @@
+   unset(${include_variable} CACHE)
+   unset(${library_variable} CACHE)
+ 
+-  find_path(${include_variable}
+-    NAMES "${header}"
+-    PATHS "${ARIA2_DEPENDENCY_ROOT}/include"
+-    NO_DEFAULT_PATH
+-    NO_CMAKE_FIND_ROOT_PATH
+-    REQUIRED)
+-  find_library(${library_variable}
+-    NAMES ${DEPENDENCY_LIBRARIES}
+-    PATHS "${ARIA2_DEPENDENCY_ROOT}/lib"
+-    NO_DEFAULT_PATH
+-    NO_CMAKE_FIND_ROOT_PATH
+-    REQUIRED)
++  if(ARIA2_DEPENDENCY_ROOT)
++    find_path(${include_variable}
++      NAMES "${header}"
++      PATHS "${ARIA2_DEPENDENCY_ROOT}/include"
++      NO_DEFAULT_PATH
++      NO_CMAKE_FIND_ROOT_PATH
++      REQUIRED)
++    find_library(${library_variable}
++      NAMES ${DEPENDENCY_LIBRARIES}
++      PATHS "${ARIA2_DEPENDENCY_ROOT}/lib"
++      NO_DEFAULT_PATH
++      NO_CMAKE_FIND_ROOT_PATH
++      REQUIRED)
++  else()
++    find_path(${include_variable}
++      NAMES "${header}"
++      REQUIRED)
++    find_library(${library_variable}
++      NAMES ${DEPENDENCY_LIBRARIES}
++      REQUIRED)
++  endif()
+ 
+   add_library(${target} UNKNOWN IMPORTED)
+   set_target_properties(${target} PROPERTIES
+@@ -42,46 +51,62 @@
+ aria2_import_dependency(aria2::sqlite sqlite3.h
+   LIBRARIES sqlite3)
+ unset(OpenSSL_DIR CACHE)
+-set(OpenSSL_DIR "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/OpenSSL")
+-find_package(OpenSSL ${ARIA2_MIN_OPENSSL_VERSION} CONFIG REQUIRED
+-  PATHS "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/OpenSSL"
+-  NO_DEFAULT_PATH
+-  NO_CMAKE_FIND_ROOT_PATH)
++if(ARIA2_DEPENDENCY_ROOT)
++  set(OpenSSL_DIR "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/OpenSSL")
++  find_package(OpenSSL ${ARIA2_MIN_OPENSSL_VERSION} CONFIG REQUIRED
++    PATHS "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/OpenSSL"
++    NO_DEFAULT_PATH
++    NO_CMAKE_FIND_ROOT_PATH)
++else()
++  find_package(OpenSSL ${ARIA2_MIN_OPENSSL_VERSION} REQUIRED)
++endif()
+ 
+ if(ARIA2_ENABLE_BITTORRENT)
+   unset(LibtorrentRasterbar_DIR CACHE)
+-  unset(Boost_DIR CACHE)
+-  unset(Boost_INCLUDE_DIR CACHE)
+-  set(Boost_NO_BOOST_CMAKE ON)
+-  set(Boost_NO_SYSTEM_PATHS ON)
+-  set(Boost_INCLUDE_DIR "${ARIA2_BOOST_ROOT}")
+-  set(BOOST_ROOT "${ARIA2_BOOST_ROOT}")
+-  find_package(LibtorrentRasterbar ${ARIA2_MIN_LIBTORRENT_VERSION}
+-    CONFIG REQUIRED
+-    PATHS "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/LibtorrentRasterbar"
+-    NO_DEFAULT_PATH
+-    NO_CMAKE_FIND_ROOT_PATH)
++  if(ARIA2_DEPENDENCY_ROOT)
++    unset(Boost_DIR CACHE)
++    unset(Boost_INCLUDE_DIR CACHE)
++    set(Boost_NO_BOOST_CMAKE ON)
++    set(Boost_NO_SYSTEM_PATHS ON)
++    set(Boost_INCLUDE_DIR "${ARIA2_BOOST_ROOT}")
++    set(BOOST_ROOT "${ARIA2_BOOST_ROOT}")
++    find_package(LibtorrentRasterbar ${ARIA2_MIN_LIBTORRENT_VERSION}
++      CONFIG REQUIRED
++      PATHS "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/LibtorrentRasterbar"
++      NO_DEFAULT_PATH
++      NO_CMAKE_FIND_ROOT_PATH)
++  else()
++    find_package(LibtorrentRasterbar ${ARIA2_MIN_LIBTORRENT_VERSION}
++      CONFIG REQUIRED)
++  endif()
+ endif()
+ 
+ unset(CURL_DIR CACHE)
+-set(CURL_DIR "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/CURL")
+-set(LIBSSH2_INCLUDE_DIR "${ARIA2_DEPENDENCY_ROOT}/include" CACHE PATH "" FORCE)
+-set(LIBSSH2_LIBRARY "${ARIA2_DEPENDENCY_ROOT}/lib/libssh2.a" CACHE FILEPATH "" FORCE)
+-set(LIBSSH2_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+-set(NGHTTP2_INCLUDE_DIR "${ARIA2_DEPENDENCY_ROOT}/include" CACHE PATH "" FORCE)
+-set(NGHTTP2_LIBRARY "${ARIA2_DEPENDENCY_ROOT}/lib/libnghttp2.a" CACHE FILEPATH "" FORCE)
+-set(NGHTTP2_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+-set(ZLIB_ROOT "${ARIA2_DEPENDENCY_ROOT}" CACHE PATH "" FORCE)
+-set(ZLIB_INCLUDE_DIR "${ARIA2_DEPENDENCY_ROOT}/include" CACHE PATH "" FORCE)
+-set(ZLIB_LIBRARY "${ARIA2_DEPENDENCY_ROOT}/lib/libz.a" CACHE FILEPATH "" FORCE)
+-set(ZLIB_LIBRARY_RELEASE "${ARIA2_DEPENDENCY_ROOT}/lib/libz.a" CACHE FILEPATH "" FORCE)
+-set(ZLIB_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
+-find_package(CURL CONFIG REQUIRED
+-  PATHS "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/CURL"
+-  NO_DEFAULT_PATH
+-  NO_CMAKE_FIND_ROOT_PATH)
+-get_target_property(aria2_curl_link_libraries CURL::libcurl_static
+-  INTERFACE_LINK_LIBRARIES)
+-list(FILTER aria2_curl_link_libraries EXCLUDE REGEX ".*ZLIB::ZLIB.*")
+-set_property(TARGET CURL::libcurl_static PROPERTY INTERFACE_LINK_LIBRARIES
+-  "${aria2_curl_link_libraries}")
++if(ARIA2_DEPENDENCY_ROOT)
++  set(CURL_DIR "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/CURL")
++  set(LIBSSH2_INCLUDE_DIR "${ARIA2_DEPENDENCY_ROOT}/include" CACHE PATH "" FORCE)
++  set(LIBSSH2_LIBRARY "${ARIA2_DEPENDENCY_ROOT}/lib/libssh2.a" CACHE FILEPATH "" FORCE)
++  set(LIBSSH2_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
++  set(NGHTTP2_INCLUDE_DIR "${ARIA2_DEPENDENCY_ROOT}/include" CACHE PATH "" FORCE)
++  set(NGHTTP2_LIBRARY "${ARIA2_DEPENDENCY_ROOT}/lib/libnghttp2.a" CACHE FILEPATH "" FORCE)
++  set(NGHTTP2_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
++  set(ZLIB_ROOT "${ARIA2_DEPENDENCY_ROOT}" CACHE PATH "" FORCE)
++  set(ZLIB_INCLUDE_DIR "${ARIA2_DEPENDENCY_ROOT}/include" CACHE PATH "" FORCE)
++  set(ZLIB_LIBRARY "${ARIA2_DEPENDENCY_ROOT}/lib/libz.a" CACHE FILEPATH "" FORCE)
++  set(ZLIB_LIBRARY_RELEASE "${ARIA2_DEPENDENCY_ROOT}/lib/libz.a" CACHE FILEPATH "" FORCE)
++  set(ZLIB_USE_STATIC_LIBS ON CACHE BOOL "" FORCE)
++  find_package(CURL CONFIG REQUIRED
++    PATHS "${ARIA2_DEPENDENCY_ROOT}/lib/cmake/CURL"
++    NO_DEFAULT_PATH
++    NO_CMAKE_FIND_ROOT_PATH)
++  get_target_property(aria2_curl_link_libraries CURL::libcurl_static
++    INTERFACE_LINK_LIBRARIES)
++  list(FILTER aria2_curl_link_libraries EXCLUDE REGEX ".*ZLIB::ZLIB.*")
++  set_property(TARGET CURL::libcurl_static PROPERTY INTERFACE_LINK_LIBRARIES
++    "${aria2_curl_link_libraries}")
++else()
++  find_package(CURL REQUIRED)
++  find_path(ARIA2_SYSTEM_NGHTTP2_INCLUDE_DIR
++    NAMES nghttp2/nghttp2ver.h
++    REQUIRED)
++endif()
+--- a/cmake/modules/Targets.cmake
++++ b/cmake/modules/Targets.cmake
+@@ -122,13 +122,25 @@
+     ${CMAKE_CURRENT_BINARY_DIR}
+     ${CMAKE_CURRENT_BINARY_DIR}/src/includes
+   PRIVATE
+-    ${ARIA2_BOOST_ROOT}
+     ${CMAKE_CURRENT_SOURCE_DIR}/lib)
++if(ARIA2_BOOST_ROOT)
++  target_include_directories(aria2_core PRIVATE ${ARIA2_BOOST_ROOT})
++else()
++  find_package(Boost REQUIRED)
++  target_link_libraries(aria2_core PRIVATE Boost::headers)
++endif()
+ target_compile_definitions(aria2_core PRIVATE
+   BOOST_ASIO_HEADER_ONLY
+   BOOST_ERROR_CODE_HEADER_ONLY)
+ target_link_libraries(aria2_core PRIVATE spdlog::spdlog_header_only)
+-target_link_libraries(aria2_core PUBLIC CURL::libcurl_static)
++if(TARGET CURL::libcurl_static)
++  target_link_libraries(aria2_core PUBLIC CURL::libcurl_static)
++else()
++  target_link_libraries(aria2_core PUBLIC CURL::libcurl)
++endif()
++if(NOT ARIA2_DEPENDENCY_ROOT)
++  target_include_directories(aria2_core PRIVATE ${ARIA2_SYSTEM_NGHTTP2_INCLUDE_DIR})
++endif()
+ if(ENABLE_WEBSOCKET)
+   target_link_libraries(aria2_core PUBLIC wslay)
+ endif()
