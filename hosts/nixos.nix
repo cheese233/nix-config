@@ -518,14 +518,22 @@
 
         dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
 
-        dip(geoip:cn) -> direct
-        domain(geosite:cn) -> direct
-
+        # Explicit domain rules come first. geosite:cn contains gstatic.com, and
+        # the country rules below used to run first: every *.gstatic.com
+        # connection matched domain(geosite:cn) -> direct and was dialed
+        # straight to Google, which the GFW blackholes -- that is the
+        # www.gstatic.com timeout. It also broke honk's node health probes
+        # (hardcoded https://www.gstatic.com/generate_204), so every node
+        # looked dead and honk fell back to `direct`, which is why nodes had to
+        # be selected by hand through the clash API.
         domain(suffix: gstatic.com) -> proxy
         domain(full: dash.cloudflare.com) -> resident
         domain(full: google.com, full: www.google.com) -> resident
         domain(geosite: facebook) -> resident
         domain(geosite: openai, geosite: anthropic, geosite: xai, geosite: google-gemini) -> resident
+
+        dip(geoip:cn) -> direct
+        domain(geosite:cn) -> direct
 
         fallback: proxy
       }
