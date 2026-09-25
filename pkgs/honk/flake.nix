@@ -12,8 +12,8 @@
       supportedSystems = [ "x86_64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
       version = "0.0.1-alpha";
-      rev = "c773b8679037825e63d92d802f2c0c21a512c9d1";
-      sourceHash = "sha256-Aa21DbNArI8yu9P6lpyRvIH1uwfSes8xyHGT5y6V/ys=";
+      rev = "1ca8155ac0225c08360f2622ca327bec18f4feb0";
+      sourceHash = "sha256-mjmGdbWKOKnORbULBqg1Hd+2NUmyqs8EP3Q2AaHchrU=";
     in
     {
       packages = forAllSystems (system:
