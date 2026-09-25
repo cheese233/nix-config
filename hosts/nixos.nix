@@ -207,6 +207,24 @@
         echo "    forward-addr: 180.184.2.2"
       }
       {
+        # 0. Keep the DoH upstream's IPv6 out of the picture.
+        #
+        # The DoH upstream is Cloudflare-fronted, and this line's IPv6 route to
+        # Cloudflare drops ~30-60% of packets (IPv4 is clean), so microdoh3's
+        # QUIC/HTTP3 connection keeps retransmitting (PTO) and the first
+        # response for a foreign domain times out.
+        #
+        # microdoh3 resolves its upstream through this unbound instance and
+        # prefers IPv6, so make dns64 ignore the upstream's own (lossy) AAAA
+        # and synthesize from the A records instead. microdoh3 then dials
+        # 64:ff9b::<IPv4>, tayga translates that back to IPv4, and the DoH hop
+        # stays on the loss-free IPv4 path (measured ~0.75s vs ~2.4-6.2s over
+        # IPv6). Requires the dns64 module, i.e. module-config above.
+        #
+        # NOTE: this is a server: option, so the block must stay first and
+        # under its own `server:` header.
+        echo "server:"
+        echo "    dns64-ignore-aaaa: \"$DOMAIN.\""
         # 1. .local → avahi2dns mDNS bridge (127.0.0.1:5354)
         echo "stub-zone:"
         echo "    name: local."
