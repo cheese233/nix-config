@@ -476,6 +476,9 @@
         auto_config_kernel_parameter: false
         dial_mode: domain++
         tls_implementation: utls
+        # Migrated from experimental.udp_nfqueue.enabled, which the upgraded
+        # honk still honors but reports as deprecated.
+        nfqueue_enable: true
       }
 
       subscription {
@@ -513,7 +516,11 @@
         # reach tayga untranslated; the translated IPv4 side is intercepted
         # on the nat64 interface instead.
         dip('64:ff9b::/96') -> direct
-        pname(unbound) -> must_rules
+        # `-> must_rules` (dae's match-and-continue, terminal/no-sniff) is not a
+        # routing target at honk 2b5bda2; these two rules keep its outcome for
+        # unbound's own traffic: CN direct, everything else via the proxy group.
+        pname(unbound) && dip(geoip:cn) -> direct(must)
+        pname(unbound) -> proxy(must)
         pname(microdoh3) -> direct
 
         dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
@@ -532,9 +539,6 @@
       experimental {
         clash_api {
           external_controller: '[::]:9091'
-        }
-        udp_nfqueue {
-            enabled: true
         }
       }
     '';

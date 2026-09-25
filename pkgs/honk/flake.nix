@@ -12,8 +12,8 @@
       supportedSystems = [ "x86_64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
       version = "0.0.1-alpha";
-      rev = "d66c702e871c9cde78ceec7c374129ac48c239b3";
-      sourceHash = "sha256-3d9Vip1fPzr5m3uqx9/EySYK3/lU0Txjyxvvh1k9SMM=";
+      rev = "c773b8679037825e63d92d802f2c0c21a512c9d1";
+      sourceHash = "sha256-Aa21DbNArI8yu9P6lpyRvIH1uwfSes8xyHGT5y6V/ys=";
     in
     {
       packages = forAllSystems (system:
@@ -22,26 +22,35 @@
             inherit system;
             overlays = [ (import rust-overlay) ];
           };
+          # crates/honk-ebpf/rust-toolchain.toml pins this channel for the object.
           rustNightly = pkgs.rust-bin.nightly."2026-07-20".default.override {
             extensions = [ "rust-src" ];
           };
+          # rust-toolchain.toml pins stable 1.98.1 for the userspace crates;
+          # the locked rust-overlay carries 1.98.0 (same patch level).
+          rustStable = pkgs.rust-bin.stable."1.98.0".default;
+          honkRustPlatform = pkgs.makeRustPlatform {
+            cargo = rustStable;
+            rustc = rustStable;
+          };
           bpf-linker = pkgs.stdenv.mkDerivation {
             pname = "bpf-linker";
-            version = "0.10.3";
+            version = "0.11.0";
             src = pkgs.fetchurl {
-              url = "https://github.com/aya-rs/bpf-linker/releases/download/v0.10.3/bpf-linker-x86_64-unknown-linux-musl.tar.gz";
-              hash = "sha256-D6RkXS37tcr+YjGwqp+tTxQwvQhx471zGegtgnv2Jiw=";
+              url = "https://github.com/aya-rs/bpf-linker/releases/download/v0.11.0/bpf-linker-x86_64-unknown-linux-musl.tar.zst";
+              hash = "sha256-EPYrqat+VE1Tg3BVJmDvy08aGRU9V1K78Pa1HzutpFA=";
             };
+            nativeBuildInputs = [ pkgs.zstd ];
             dontConfigure = true;
             dontBuild = true;
             dontUnpack = true;
             installPhase = ''
-              tar -xzf "$src"
+              zstd -dc "$src" | tar -xf -
               install -Dm755 bpf-linker $out/bin/bpf-linker
             '';
           };
           src = pkgs.fetchFromGitHub {
-            owner = "daeuniverse";
+            owner = "cheese233";
             repo = "honk";
             inherit rev;
             hash = sourceHash;
@@ -52,17 +61,16 @@
             inherit version src;
             cargoRoot = "crates/honk-ebpf";
             cargoLock.lockFile = "${src}/crates/honk-ebpf/Cargo.lock";
-            patches = [ ./lpm-map-size.patch ];
 
             nativeBuildInputs = [ bpf-linker rustNightly ];
             env = {
               RUST_SRC_PATH = "${rustNightly}/lib/rustlib/src/rust";
             };
 
+            # Upstream now sets `linker=bpf-linker` directly, so the linker is
+            # resolved from PATH (bpf-linker is a nativeBuildInput); only the
+            # stack-size cap still needs narrowing.
             postPatch = ''
-              substituteInPlace crates/honk-ebpf/.cargo/config.toml \
-                --replace-fail /root/.cargo/bin/bpf-linker-wrapper \
-                ${bpf-linker}/bin/bpf-linker
               substituteInPlace crates/honk-ebpf/.cargo/config.toml \
                 --replace-fail 'bpf-stack-size=4096' 'bpf-stack-size=512'
             '';
@@ -114,12 +122,17 @@
           };
 
           honk-core-build = ./core-build.rs;
-          honk = pkgs.rustPlatform.buildRustPackage {
+          honk = honkRustPlatform.buildRustPackage {
             pname = "honk";
             inherit version src;
             cargoLock = {
               lockFile = "${src}/Cargo.lock";
-              outputHashes."boring-sys-5.1.0" = "sha256-Tvf9qpUC6IO3ikkHO7BG0lp+ZGtu4DiS0HKKFdmjwjY=";
+              outputHashes = {
+                "boring-sys-5.2.0" = "sha256-VG0POjZdA2JazFt1jFe4UfdO01Pw7E1EC/7u8fOmfBs=";
+                "quinn-0.11.11" = "sha256-G2isJHacUgeSe852A3a8WH/Amh0i5h0V1ziho1jV3Rs=";
+                "quinn-proto-0.11.17" = "sha256-G2isJHacUgeSe852A3a8WH/Amh0i5h0V1ziho1jV3Rs=";
+                "quinn-udp-0.5.15" = "sha256-G2isJHacUgeSe852A3a8WH/Amh0i5h0V1ziho1jV3Rs=";
+              };
             };
             buildFeatures = [ "ebpf" ];
             cargoBuildFlags = [ "-p" "honk-core" ];
@@ -136,8 +149,6 @@
               LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             };
 
-            patches = [ ./local-file-subscription.patch ];
-
             postPatch = ''
               cp ${honk-core-build} crates/honk-core/build.rs
             '';
@@ -145,7 +156,7 @@
             doCheck = false;
             meta = with pkgs.lib; {
               description = "An eBPF-based transparent proxy engine inspired by dae and sing-box";
-              homepage = "https://github.com/daeuniverse/honk";
+              homepage = "https://github.com/cheese233/honk";
               license = licenses.gpl3Only;
               mainProgram = "honk-core";
               platforms = platforms.linux;
