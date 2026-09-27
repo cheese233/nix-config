@@ -27,7 +27,13 @@ const MAX_DNS_LEN: usize = 4096;
 /// Reconnect backoff schedule cap.
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(5);
 /// QUIC keep-alive ping interval.
-const KEEP_ALIVE: Duration = Duration::from_secs(15);
+///
+/// Deliberately much shorter than the peer's idle timeout: with a lossy path a
+/// single dropped PING must not let the peer's idle timer expire, and the
+/// observed graceful closes (`closed by peer: 256`) arrived exactly one interval
+/// apart — i.e. at the first PING — which is what a 15s interval racing a ~30s
+/// idle timeout looks like when PINGs are being dropped.
+const KEEP_ALIVE: Duration = Duration::from_secs(5);
 /// QUIC idle timeout we advertise.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// How often a worker publishes its quality measurement.
@@ -694,7 +700,14 @@ fn process_quic_events(
             }
             proto::Event::ConnectionLost { reason } => {
                 log::warn!("quic: connection lost on {}: {reason}", rt.my_remote);
-                rt.fail_streak = rt.fail_streak.saturating_add(1);
+                // A peer that closes at the application layer is draining us
+                // (Cloudflare does this routinely); the path was fine. Counting
+                // it as a failure would let server-side churn drive migrations.
+                if matches!(&reason, proto::ConnectionError::ApplicationClosed(_)) {
+                    rt.fail_streak = 0;
+                } else {
+                    rt.fail_streak = rt.fail_streak.saturating_add(1);
+                }
                 fail_all_pending(dns_sock, pending, rt);
                 quic.drop_conn();
                 *h3 = H3::new();
@@ -924,6 +937,18 @@ fn housekeeping(
     }
 }
 
+/// Whether worker `idx` of `workers` may start a migration right now.
+///
+/// Stateless phase: each worker owns one `MIGRATE_STAGGER`-long window per
+/// `workers × MIGRATE_STAGGER` cycle. An earlier "time since the weights
+/// changed" variant staggered nothing once the revision was old, which let
+/// three workers re-handshake in the same second.
+fn migration_slot_open(now_secs: u64, workers: usize, idx: usize) -> bool {
+    let workers = workers.max(1) as u64;
+    let slot = MIGRATE_STAGGER.as_secs().max(1);
+    (now_secs / slot) % workers == idx as u64 % workers
+}
+
 /// The best alternative to `current`, by published weight.
 fn best_alternative(set: &UpstreamSet, current: IpAddr) -> Option<IpAddr> {
     set.addrs
@@ -962,10 +987,8 @@ fn migration_target(rt: &mut Runtime, cfg: &WorkerConfig, now: Instant) -> Optio
         return None;
     }
 
-    // Stagger: after a new revision, worker i acts once i*STAGGER has passed,
-    // so the fleet never re-handshakes all at once.
-    let since_publish = shared::mono_secs().saturating_sub(rt.set.published_mono_secs);
-    if since_publish < MIGRATE_STAGGER.as_secs() * (rt.child_idx as u64 + 1) {
+    // Stagger so the fleet never re-handshakes all at once.
+    if !migration_slot_open(shared::mono_secs(), rt.set.workers as usize, rt.child_idx) {
         return None;
     }
 
@@ -997,5 +1020,32 @@ fn fail_all_pending(sock: &UdpSocket, pending: &mut HashMap<u64, Pending>, rt: &
     for (_, p) in pending.drain() {
         rt.quality.on_failure();
         send_servfail(sock, &p.query, p.peer);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_slots_rotate_one_worker_at_a_time() {
+        let workers = 6usize;
+        let slot = MIGRATE_STAGGER.as_secs();
+        // Within one cycle exactly one worker is eligible per slot.
+        for cycle in 0..3u64 {
+            for i in 0..workers {
+                let t = cycle * workers as u64 * slot + i as u64 * slot;
+                let open: Vec<usize> = (0..workers)
+                    .filter(|w| migration_slot_open(t, workers, *w))
+                    .collect();
+                assert_eq!(open, vec![i], "at t={t} only worker {i} may move");
+            }
+        }
+        // A worker is *not* eligible right after its own slot ends.
+        assert!(migration_slot_open(0, workers, 0));
+        assert!(!migration_slot_open(MIGRATE_STAGGER.as_secs(), workers, 0));
+        // Degenerate worker counts do not divide by zero or wedge anyone.
+        assert!(migration_slot_open(7, 0, 0));
+        assert!(migration_slot_open(7, 1, 0));
     }
 }

@@ -209,10 +209,11 @@
       {
         # NOTE: the DoH upstream is deliberately left with its own real AAAA
         # records (no `dns64-ignore-aaaa`). microdoh3 therefore resolves
-        # $DOMAIN to native Cloudflare IPv6 and dials that; honk classifies UDP
-        # by destination, so a non-CN, non-NAT64 destination falls through to
-        # `fallback: proxy` and the DoH rides the subscription — which is the
-        # path that measured 0% loss here, versus 30-60% direct to Cloudflare.
+        # $DOMAIN to native Cloudflare addresses and dials them itself: honk's
+        # `pname(microdoh3) -> direct` matches this process for UDP too, so the
+        # DoH never rides the subscription. What the weighted selection varies
+        # is therefore *which direct path* is used — e.g. native IPv6 to the
+        # edge (measured 30-60% loss here) versus IPv4 — not proxy vs direct.
         #
         # 1. .local → avahi2dns mDNS bridge (127.0.0.1:5354)
         echo "stub-zone:"
@@ -307,9 +308,10 @@
   # under DNS control) — widen the pool by serving more addresses for the name;
   # there is deliberately no client-side seed list. $DOMAIN keeps its real
   # AAAA and A records, so both families are candidates and the workers'
-  # dual-stack sockets can reach either: a honk rule matches IPv4/v6 by
-  # destination, so the two families take different paths (NAT64 direct vs
-  # `fallback: proxy`) and the scoring picks whichever measures better.
+  # dual-stack sockets can reach either, letting the scoring compare *direct*
+  # paths (native IPv6 vs IPv4 to the same edge — measured >10x apart) instead
+  # of pinning one family by hand. To route the DoH through the subscription
+  # instead, the lever is the honk rule below: `pname(microdoh3) -> direct`.
   #
   # NOTE: --xps-cpus is deliberately NOT enabled. It is implemented (and the
   # module exposes it), but enabling it here would give 12 workers instead of 6
