@@ -55,6 +55,46 @@
               description = "Bootstrap DNS server for resolving the DoH upstream hostname.";
             };
 
+            preferIpv4 = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Publish IPv4 candidates instead of IPv6 ones.
+
+                The candidate set is pinned to a single address family — a
+                worker binds its QUIC socket once and never rebinds — and the
+                default is IPv6-first, which is right on NAT64/DNS64-only
+                networks. Set this to select the IPv4 half instead, e.g. when
+                the IPv6 path to the upstream is the lossy one.
+              '';
+            };
+
+            xpsCpus = lib.mkOption {
+              type = lib.types.bool;
+              default = false;
+              description = ''
+                Derive the worker CPUs and worker count from NIC queue XPS maps
+                instead of the physical-core topology: one worker per queue
+                CPU, so packet processing and the process stay on one core.
+
+                This is a hint, not a promise: it only helps when the workers'
+                own sockets actually meet a multi-queue NIC. Traffic that
+                crosses a TUN, a bridge or a single-queue PPP device has no
+                queue to align with. Falls back to physical cores when no XPS
+                map is found.
+              '';
+            };
+
+            xpsInterface = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [ ];
+              example = [ "enp2s0f1" ];
+              description = ''
+                Interfaces whose XPS maps are read when `xpsCpus` is enabled.
+                Defaults to the interface carrying the default route.
+              '';
+            };
+
             tokenFile = lib.mkOption {
               type = lib.types.nullOr lib.types.path;
               default = null;
@@ -146,6 +186,12 @@
                   "--cpus" (lib.concatStringsSep "," (map toString cfg.cpus))
                 ] ++ lib.optionals (cfg.tokenFile != null) [
                   "--token-file" cfg.tokenFile
+                ] ++ lib.optionals cfg.preferIpv4 [
+                  "--prefer-ipv4"
+                ] ++ lib.optionals cfg.xpsCpus [
+                  "--xps-cpus"
+                ] ++ lib.optionals (cfg.xpsInterface != [ ]) [
+                  "--xps-interface" (lib.concatStringsSep "," cfg.xpsInterface)
                 ] ++ lib.optionals cfg.verbose [
                   "--verbose"
                 ] ++ lib.optionals cfg.pad [

@@ -53,10 +53,22 @@ pub struct Quic {
     response_scratch: Vec<u8>,
     /// Stats for logging.
     pub zero_rtt_accepted: bool,
+    /// Whether this connection *offered* early data at all.
+    ///
+    /// Reported separately from `zero_rtt_accepted` because the two failures
+    /// are completely different: "offered but rejected" is a retry-able server
+    /// decision, while "never offered" means the server's TLS tickets do not
+    /// carry the `early_data` extension (max_early_data_size = 0), which makes
+    /// 0-RTT impossible for that endpoint no matter what the client does.
+    /// Both read as `false` in `zero_rtt_accepted`, which is misleading.
+    pub zero_rtt_offered: bool,
 }
 
 /// Build the QUIC client config: webpki roots, ALPN h3, TLS 1.3 early data.
-pub fn build_client_config(keep_alive: Duration, idle: Duration) -> Result<proto::ClientConfig, QuicError> {
+pub fn build_client_config(
+    keep_alive: Duration,
+    idle: Duration,
+) -> Result<proto::ClientConfig, QuicError> {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
@@ -67,8 +79,15 @@ pub fn build_client_config(keep_alive: Duration, idle: Duration) -> Result<proto
         .with_no_client_auth();
     crypto.alpn_protocols = vec![ALPN_H3.to_vec()];
     crypto.enable_early_data = true;
-    // rustls keeps an in-memory session cache (256 entries) by default → 0-RTT
-    // on reconnects within this process.
+    // NOTE: rustls keeps an in-memory session cache (256 entries) by default,
+    // so resumption tickets *are* reused across reconnects within this process.
+    // That is necessary but not sufficient for 0-RTT: rustls only offers early
+    // data when the server's NewSessionTicket carries the `early_data`
+    // extension (max_early_data_size > 0). Some endpoints never send it — e.g.
+    // a Cloudflare vhost served via Tunnel/Worker, where replaying a request is
+    // unsafe — and then 0-RTT is impossible no matter what the client does.
+    // `zero_rtt_offered` vs `zero_rtt_accepted` tells the two cases apart; see
+    // the wire probe in the README.
 
     let quic_crypto = QuicClientConfig::try_from(crypto)?;
     let mut cfg = proto::ClientConfig::new(Arc::new(quic_crypto));
@@ -103,6 +122,7 @@ impl Quic {
             recv_arena: vec![0; BATCH_SIZE * IOV_SIZE],
             response_scratch: Vec::with_capacity(1500),
             zero_rtt_accepted: false,
+            zero_rtt_offered: false,
         }
     }
 
@@ -112,21 +132,28 @@ impl Quic {
     }
 
     /// Start a new connection to `remote`. Any previous connection is dropped.
-    pub fn connect(&mut self, now: Instant, remote: SocketAddr, sock: &UdpSocket) -> Result<(), QuicError> {
-        let (handle, conn) = self.endpoint.connect(
-            now,
-            self.client_config.clone(),
-            remote,
-            &self.server_name,
-        )?;
+    pub fn connect(
+        &mut self,
+        now: Instant,
+        remote: SocketAddr,
+        sock: &UdpSocket,
+    ) -> Result<(), QuicError> {
+        let (handle, conn) =
+            self.endpoint
+                .connect(now, self.client_config.clone(), remote, &self.server_name)?;
+        // `has_0rtt()` is already meaningful here: noq runs write_crypto() and
+        // init_0rtt() inside Connection::new, which Endpoint::connect calls
+        // before returning. It is true only when a cached ticket allowed early
+        // data *and* the server advertised a non-zero max_early_data_size.
+        let offered = conn.has_0rtt();
         log::info!(
-            "quic: connecting to {remote} (server_name={}, 0-rtt={})",
+            "quic: connecting to {remote} (server_name={}, 0-rtt offered={offered})",
             self.server_name,
-            conn.has_0rtt()
         );
         self.conn = Some(conn);
         self.handle = Some(handle);
         self.zero_rtt_accepted = false;
+        self.zero_rtt_offered = offered;
         self.flush(now, sock)?;
         Ok(())
     }
@@ -180,11 +207,7 @@ impl Quic {
 
     /// Read available data from a stream; calls `f` with each chunk.
     /// Returns (eof, error_encountered).
-    pub fn read_stream(
-        &mut self,
-        id: proto::StreamId,
-        mut f: impl FnMut(&[u8]),
-    ) -> (bool, bool) {
+    pub fn read_stream(&mut self, id: proto::StreamId, mut f: impl FnMut(&[u8])) -> (bool, bool) {
         let Some(conn) = self.conn.as_mut() else {
             return (false, true);
         };
@@ -310,9 +333,19 @@ impl Quic {
         let mut out = Vec::new();
         if let Some(conn) = self.conn.as_mut() {
             while let Some(ev) = conn.poll() {
-                if matches!(ev, proto::Event::Connected) && conn.accepted_0rtt() {
-                    self.zero_rtt_accepted = true;
-                    log::info!("quic: 0-RTT accepted by server");
+                if matches!(ev, proto::Event::Connected) {
+                    // noq applies early-data acceptance before pushing
+                    // Connected, so both readings are valid here.
+                    if conn.accepted_0rtt() {
+                        self.zero_rtt_accepted = true;
+                        log::info!("quic: 0-RTT accepted by server");
+                    } else if self.zero_rtt_offered {
+                        log::warn!("quic: 0-RTT offered but rejected by server");
+                    } else {
+                        log::debug!(
+                            "quic: 0-RTT unavailable (server ticket carries no early_data)"
+                        );
+                    }
                 }
                 out.push(ev);
             }

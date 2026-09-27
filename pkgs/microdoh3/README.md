@@ -14,31 +14,68 @@ no libcurl, no hickory.
 ## Architecture
 
 ```
-supervisor (sole bootstrap-DNS resolver, fork × N, waitpid,
-            restart w/ backoff, keeps resolution fresh in shm)
- │   memfd + MAP_SHARED page (seqlock) — children map PROT_READ
- └── child i: pinned to physical CPU core i
+supervisor (sole bootstrap-DNS resolver, fork × N, waitpid, restart w/ backoff;
+            resolves the upstream, aggregates worker scores into per-address
+            weights)
+ │   memfd #1 "resolve" (seqlock): candidate addrs + weights  → children RO
+ │   memfd #2 "scores"  (seqlock): one slot per worker        ← children RW
+ └── child i: pinned to CPU
       ├── SO_REUSEPORT DNS socket (kernel load-balancing)
-      ├── own QUIC connection upstream (persistent, keep-alive)
+      ├── exactly ONE QUIC connection upstream (persistent, keep-alive)
+      ├── writes its measured RTT/loss into score slot i
       └── one epoll set: [dns_sock, quic_sock, timerfd, signal pipe]
 ```
 
 Everything in the request path runs on one thread per core — no channels,
-no context switches. Upstream addresses live in a single shared-memory
-page written only by the supervisor (a seqlock-guarded memfd, mapped
-read-only by children). All bootstrap DNS — startup resolution and TTL
+no context switches. All bootstrap DNS — startup resolution and TTL
 refresh — happens in the supervisor (cold path): children never do
 blocking DNS; they pick up refreshed addresses with a single atomic load
 per housekeeping pass.
+
+### Multi-address selection without touching the hot path
+
+The upstream is a *set* of candidate addresses, each with a weight. A worker
+owns exactly one connection (so requests never pay for connection switching),
+and its address comes from a deterministic weighted slot assignment:
+`(idx + 0.5) / workers` of the cumulative weights. Because unbound sends every
+query from a random source port, `SO_REUSEPORT` spreads queries evenly across
+workers — so **the weights come true as a fleet-wide traffic split**. Six
+workers at weights 3:2:1 really do place 3/2/1 workers on the addresses; no
+per-query machinery, no eBPF, no socket weighting.
+
+Scores are measured where it matters — dispatch → response, per worker — and
+published every 2s. The score is just the inverse of the measured RTT, and it
+is computed by the worker, so the supervisor needs no quality model:
+
+* each worker publishes the score of the address it is sitting on (0 = it has
+  not completed a request yet, or is not connected);
+* the supervisor keeps the best score seen per address and gives every address
+  *without* a score a small floor — an unmeasured or currently-dead candidate
+  gets tried rather than dropping out;
+* one rotating address gets a full extra share each round, so exploration
+  cycles through the pool instead of pinning whichever candidate was probed
+  first.
+
+Loss needs no term of its own: a lossy path shows up as slow *successful*
+requests (retransmits), which is exactly what the RTT measures.
+
+A worker migrates only when the newly assigned address measures materially
+better (150% of the current quality), at most once every 3 minutes, staggered
+by worker index, and immediately when its current address stops failing or is
+dropped from the set. Reconnects are otherwise just reconnects: a DNS TTL
+refresh updates the weights and nothing else.
 
 ## Latency techniques
 
 - **Prefork shard-per-core** — one child per physical core (sysfs topology),
   `sched_setaffinity`, kernel-side query dispatch via `SO_REUSEPORT`.
-- **QUIC 0-RTT** — TLS 1.3 early data with an in-memory session cache;
-  reconnects (e.g. after GOAWAY) carry requests in the first flight.
+- **Measured multi-address selection** — one connection per worker, weighted
+  by measured RTT/loss, so a bad anycast address loses its workers instead of
+  stalling them (see above).
 - **Persistent connection** — PING keep-alives + proactive reconnect keep
   handshakes out of the request path.
+- **QUIC 0-RTT** — wired up and used when the endpoint allows it; see the
+  0-RTT note below for why that is a server-side property.
 - **GRO/GSO batching** — `UDP_GRO`/`UDP_SEGMENT` + `recvmmsg`/`sendmmsg`
   via noq-udp.
 - **Zero-parse hot path** — DNS wire bytes pass through untouched;
@@ -55,7 +92,8 @@ per housekeeping pass.
 
 - RFC 8484 GET (base64url, ID zeroed) + POST fallback for queries > 1400 B
 - HTTP/3 with hand-rolled QPACK (static table, literal encoder, Huffman decoder)
-- QUIC 0-RTT resume (in-memory; see note below)
+- QUIC 0-RTT resume (in-memory; only if the server's tickets allow it)
+- Weighted upstream selection from a candidate set, with exploration
 - EDNS0 padding (RFC 8467), optional
 - Bearer auth via `$MICRODOH_TOKEN`, `--token`, or `--token-file`
 - Bootstrap DNS with TTL-aware cache (stale-while-revalidate)
@@ -77,15 +115,54 @@ microdoh3 --bootstrap-dns 127.0.0.1 --busy-poll --mlockall \
 
 # Verbose
 microdoh3 --verbose --upstream https://dns.google/dns-query
+
+# Multi-address selection: the candidate set is whatever the upstream hostname
+# resolves to, and the weights spread the workers across it by measured quality.
+# Widen the pool in DNS (serve more addresses for the name).
+microdoh3 --bootstrap-dns 127.0.0.1 --prefer-ipv4 \
+  --upstream https://doh.example/dns-query --token "$TOKEN"
+
+# Derive workers from NIC queue XPS maps (one worker per queue CPU).
+# Only useful when the workers' sockets actually meet a multi-queue NIC.
+microdoh3 --xps-cpus --xps-interface enp2s0f1 --upstream https://dns.google/dns-query
 ```
 
 ## Notes
 
+- **0-RTT is a server-side property, not a client one.** rustls reuses
+  resumption tickets from its in-memory cache (256 entries, shared across
+  `ClientConfig::clone()`), but it only *offers* early data when the server's
+  `NewSessionTicket` carries the `early_data` extension
+  (`max_early_data_size > 0`); rustls defaults that to 0 when the extension is
+  absent. Some endpoints never send it — e.g. a Cloudflare vhost served via
+  Tunnel/Worker, where replaying a request is not safe — and then no client
+  change can enable 0-RTT. Verify a candidate endpoint with:
+
+  ```bash
+  openssl s_client -quic -connect <host>:443 -alpn h3 -msg 2>&1 |
+    grep -c '2a 00 04 ff ff ff ff'   # >0 ⇒ early_data advertised
+  ```
+
+  The two outcomes are reported separately (`0-rtt offered` vs `0-rtt
+  accepted`, plus `FLAG_ZERO_RTT`/`FLAG_ZERO_RTT_OK` in the score page) so a
+  server policy is not mistaken for a client bug.
 - **0-RTT replay**: early data can be replayed by a network attacker; DNS
-  queries are idempotent, so this is acceptable here. The in-memory ticket
-  cache means the first connection after process start is 1-RTT, all
-  subsequent reconnects are 0-RTT.
+  queries are idempotent, so this is acceptable here.
+- Known limitation: when a server *does* advertise early data and then rejects
+  it, noq resets the 0-RTT streams and microdoh3 answers SERVFAIL for those
+  queries instead of re-dispatching them over the 1-RTT handshake. unbound
+  retries, so nothing is lost, but one RTT is wasted. Unreachable against
+  endpoints that never advertise early data (see above).
 - The HTTP/3 layer implements the client subset needed for DoH: control
   stream + SETTINGS (QPACK dynamic table disabled), one request stream per
   query, GOAWAY handling. No server push, no trailers semantics.
-- IPv6 upstreams are preferred (works well on IPv6-only/NAT64 networks).
+- The published candidate set is pinned to **one address family**: the family
+  of the first address, which is what every worker binds its QUIC socket to.
+  The default order is IPv6-first (works well on IPv6-only / NAT64 networks);
+  `--prefer-ipv4` selects the IPv4 half instead, which is what you want when
+  the IPv6 path to the upstream is lossy. Addresses of the other family are
+  dropped — no worker could dial them, and they could never produce a score.
+- `--xps-cpus` aligns workers with NIC TX queues. It only helps when the
+  workers' sockets actually traverse those queues: traffic that enters or
+  leaves through a TUN, a bridge or a single-queue PPP device has no queue to
+  align with, and the queue count can exceed the physical core count.

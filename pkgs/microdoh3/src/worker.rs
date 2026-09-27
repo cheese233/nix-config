@@ -4,18 +4,20 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use noq_proto as proto;
 
-use crate::shared;
 use crate::dns;
 use crate::event::{Poller, TOKEN_DNS, TOKEN_QUIC, TOKEN_SIGNAL, TOKEN_TIMER};
-use crate::h3::{self, H3, H3Event};
+use crate::h3::{self, H3Event, H3};
 use crate::quic::{self, Quic};
+use crate::shared::{
+    self, score_from_rtt, ScoreSample, UpstreamSet, FLAG_CONNECTED, FLAG_HANDSHAKING, FLAG_ZERO_RTT,
+};
 use crate::url::HttpsUrl;
 
 /// GET is used for wire queries up to this size; larger use POST.
@@ -28,6 +30,21 @@ const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(5);
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 /// QUIC idle timeout we advertise.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How often a worker publishes its quality measurement.
+const SCORE_INTERVAL: Duration = Duration::from_secs(2);
+/// Minimum time between two migrations of the same worker. A migration costs a
+/// full handshake, so staying put is the default; this floor keeps a flapping
+/// weight set from re-handshaking continuously.
+const MIGRATE_MIN_INTERVAL: Duration = Duration::from_secs(180);
+/// Per-worker delay after a new revision before a move is considered,
+/// multiplied by the worker index — keeps the fleet from migrating at once.
+const MIGRATE_STAGGER: Duration = Duration::from_secs(5);
+/// Move only when the newly assigned address measures this much better than
+/// the current one (percent of quality). Hysteresis against weight churn.
+const MIGRATE_RATIO_PCT: u64 = 150;
+/// A worker whose connection keeps failing may jump to the best alternative
+/// this soon after its previous move (the normal floor is `MIGRATE_MIN_INTERVAL`).
+const FAIL_MIGRATE_INTERVAL: Duration = Duration::from_secs(10);
 
 pub struct WorkerConfig {
     pub listen: SocketAddr,
@@ -42,8 +59,10 @@ pub struct WorkerConfig {
     /// read-only here). The supervisor is the sole writer and keeps it
     /// fresh — children never do blocking DNS.
     pub shm_fd: std::os::fd::RawFd,
-    /// Worker index (informational, for logs).
-    #[allow(dead_code)]
+    /// Inherited fd of the shared worker-score page (mapped read-write here:
+    /// each child owns exactly one slot and is its only writer).
+    pub score_fd: std::os::fd::RawFd,
+    /// Worker index: selects the score slot and the weighted address slot.
     pub child_idx: usize,
 }
 
@@ -52,6 +71,115 @@ struct Pending {
     query: Vec<u8>,
     peer: SocketAddr,
     deadline: Instant,
+    /// When the request was dispatched, for end-to-end latency measurement.
+    started: Instant,
+}
+
+/// Rolling quality measurement of the address this worker is using.
+///
+/// Measured at the request level (dispatch → response) rather than from QUIC
+/// internals: that is the number the weight actually cares about, and it needs
+/// no extra protocol plumbing.
+struct Quality {
+    /// EWMA of successful request latency, microseconds (0 = nothing yet).
+    ewma_us: u64,
+    /// Completed / failed requests, for diagnostics in the score slot.
+    ok: u32,
+    failed: u32,
+}
+
+impl Quality {
+    fn new() -> Self {
+        Self {
+            ewma_us: 0,
+            ok: 0,
+            failed: 0,
+        }
+    }
+
+    fn on_success(&mut self, latency: Duration) {
+        let us = latency.as_micros().min(u32::MAX as u128) as u64;
+        self.ok = self.ok.saturating_add(1);
+        if self.ewma_us == 0 {
+            self.ewma_us = us;
+        } else {
+            // 1/4 gain: responsive to a degraded path, not to single outliers.
+            self.ewma_us = (self.ewma_us * 3 + us) / 4;
+        }
+    }
+
+    fn on_failure(&mut self) {
+        self.failed = self.failed.saturating_add(1);
+    }
+
+    /// Build the sample to publish.
+    ///
+    /// The score is just the inverse of the measured RTT, so nothing here has
+    /// to decide what "healthy" means: a worker that cannot serve traffic has
+    /// no successful sample and therefore scores 0, which the supervisor reads
+    /// as "unmeasured" and floors. A lossy path needs no extra term either —
+    /// its successes are the retransmitted, slow ones.
+    fn sample(&self, addr: Option<IpAddr>, flags: u32) -> ScoreSample {
+        ScoreSample {
+            addr,
+            score: score_from_rtt(self.ewma_us.min(u32::MAX as u64) as u32),
+            ok: self.ok,
+            fail: self.failed,
+            flags,
+            updated_mono_secs: 0,
+        }
+    }
+
+    fn reset_window(&mut self) {
+        self.ok = 0;
+        self.failed = 0;
+    }
+}
+
+/// Per-worker mutable state that the request path, the score publisher and the
+/// migration policy all share.
+struct Runtime {
+    /// Worker index (score slot, weighted slot, migration stagger).
+    child_idx: usize,
+    /// Consecutive failed connects/losses on the current address.
+    fail_streak: u32,
+    /// Latest upstream set published by the supervisor.
+    set: UpstreamSet,
+    /// Address this worker is currently connected to.
+    my_remote: SocketAddr,
+    /// Slot index of `my_remote` within `set`.
+    slot: usize,
+    /// Last time this worker changed address (rate-limits handshakes).
+    last_migrate: Instant,
+    /// Rolling request-level quality of `my_remote`.
+    quality: Quality,
+    /// Last score publication.
+    last_score: Instant,
+}
+
+impl Runtime {
+    fn new(set: UpstreamSet, cfg: &WorkerConfig, now: Instant) -> Self {
+        // The supervisor publishes a single-family candidate set (the family
+        // is whichever address comes first), and the socket is bound from it
+        // here and never rebound, so worker and supervisor always agree.
+        let slot = set.slot_for(cfg.child_idx).unwrap_or(0);
+        let my_remote = SocketAddr::new(set.addrs[slot], cfg.upstream.port);
+        Self {
+            child_idx: cfg.child_idx,
+            fail_streak: 0,
+            set,
+            my_remote,
+            slot,
+            last_migrate: now,
+            quality: Quality::new(),
+            last_score: now,
+        }
+    }
+
+    /// Weight the supervisor currently assigns to the address we are on.
+    fn current_weight(&self) -> u32 {
+        self.set.weight_of(self.my_remote.ip())
+    }
 }
 
 /// A validated query received while the connection is handshaking
@@ -126,19 +254,27 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let dns_sock = bind_dns_socket(cfg.listen, cfg.busy_poll)?;
     log::info!("worker {} listening on {dns_sock:?}", std::process::id());
 
-    // Read upstream addresses from the supervisor's shared page (read-only).
+    // Read upstream addresses and their selection weights from the
+    // supervisor's shared page (read-only here).
     let mut shm = shared::ResolveReader::map_readonly(cfg.shm_fd)?;
-    let mut remotes: Vec<SocketAddr> = shm
-        .read_initial()
-        .iter()
-        .map(|&ip| SocketAddr::new(ip, cfg.upstream.port))
-        .collect();
-    if remotes.is_empty() {
+    let set = shm.read_initial();
+    if set.addrs.is_empty() {
         return Err("no upstream addresses in shared memory".into());
     }
-    let mut remote_idx = 0usize;
+    // Claim this worker's own score slot (single writer per slot).
+    let scores = shared::ScoreWriter::map(cfg.score_fd, cfg.child_idx)?;
 
-    let quic_sock = bind_quic_socket(&remotes[remote_idx])?;
+    let start_now = Instant::now();
+    let mut rt = Runtime::new(set, &cfg, start_now);
+    log::info!(
+        "worker {} on {}/{} starting on {}",
+        std::process::id(),
+        cfg.child_idx,
+        rt.set.workers,
+        rt.my_remote
+    );
+
+    let quic_sock = bind_quic_socket(&rt.my_remote)?;
     let udp_state = Quic::init_socket(&quic_sock)?;
     let client_config = quic::build_client_config(KEEP_ALIVE, IDLE_TIMEOUT)?;
     let mut quic = Quic::new(client_config, cfg.upstream.host.clone(), udp_state);
@@ -159,7 +295,7 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut now = Instant::now();
     // Streams can open immediately only with remembered (0-RTT) transport
     // parameters; otherwise wait for the Connected event.
-    let mut h3_ready = connect_and_preamble(&mut quic, now, remotes[remote_idx], &quic_sock)?;
+    let mut h3_ready = connect_and_preamble(&mut quic, now, rt.my_remote, &quic_sock)?;
 
     let mut events = [nix::sys::epoll::EpollEvent::empty(); 16];
     let mut shutdown = false;
@@ -192,6 +328,7 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
                     &mut pending,
                     &mut queue,
                     &mut req_buf,
+                    &mut rt,
                     goaway,
                     h3_ready,
                     now,
@@ -210,6 +347,7 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
                         &mut queue,
                         &mut h3_events,
                         &mut req_buf,
+                        &mut rt,
                         &mut goaway,
                         &mut h3_ready,
                         &mut reconnect_at,
@@ -225,12 +363,12 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
                         &dns_sock,
                         &quic_sock,
                         &mut shm,
+                        &scores,
                         &mut quic,
                         &mut h3,
                         &mut pending,
                         &mut queue,
-                        &mut remotes,
-                        &mut remote_idx,
+                        &mut rt,
                         &mut goaway,
                         &mut h3_ready,
                         &mut reconnect_at,
@@ -249,7 +387,8 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
 
         // Connection fully drained → schedule reconnect.
         if quic.has_conn() && quic.is_drained() {
-            fail_all_pending(&dns_sock, &mut pending);
+            rt.fail_streak = rt.fail_streak.saturating_add(1);
+            fail_all_pending(&dns_sock, &mut pending, &mut rt);
             quic.drop_conn();
             h3 = H3::new();
             goaway = false;
@@ -263,7 +402,7 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Graceful shutdown: fail in-flight queries, close the connection.
-    fail_all_pending(&dns_sock, &mut pending);
+    fail_all_pending(&dns_sock, &mut pending, &mut rt);
     quic.close(now, &quic_sock);
     Ok(())
 }
@@ -311,6 +450,7 @@ fn drain_dns(
     pending: &mut HashMap<u64, Pending>,
     queue: &mut std::collections::VecDeque<QueuedQuery>,
     req_buf: &mut Vec<u8>,
+    rt: &mut Runtime,
     goaway: bool,
     h3_ready: bool,
     now: Instant,
@@ -328,12 +468,14 @@ fn drain_dns(
         }
 
         if goaway || !quic.has_conn() {
+            rt.quality.on_failure();
             send_servfail(dns_sock, query, peer);
             continue;
         }
         if !h3_ready {
             // Handshake in progress: queue briefly (the handshake is ~1 RTT).
             if queue.len() >= MAX_QUEUED {
+                rt.quality.on_failure();
                 send_servfail(dns_sock, query, peer);
             } else {
                 queue.push_back(QueuedQuery {
@@ -344,7 +486,9 @@ fn drain_dns(
             }
             continue;
         }
-        dispatch_query(cfg, dns_sock, quic, h3, pending, req_buf, query, peer, now);
+        dispatch_query(
+            cfg, dns_sock, quic, h3, pending, req_buf, rt, query, peer, now,
+        );
     }
     let _ = quic.flush(now, quic_sock);
 }
@@ -360,14 +504,18 @@ fn flush_queue(
     pending: &mut HashMap<u64, Pending>,
     queue: &mut std::collections::VecDeque<QueuedQuery>,
     req_buf: &mut Vec<u8>,
+    rt: &mut Runtime,
     now: Instant,
 ) {
     while let Some(q) = queue.pop_front() {
         if q.deadline <= now {
+            rt.quality.on_failure();
             send_servfail(dns_sock, &q.query, q.peer);
             continue;
         }
-        dispatch_query(cfg, dns_sock, quic, h3, pending, req_buf, &q.query, q.peer, now);
+        dispatch_query(
+            cfg, dns_sock, quic, h3, pending, req_buf, rt, &q.query, q.peer, now,
+        );
     }
     let _ = quic.flush(now, quic_sock);
 }
@@ -381,6 +529,7 @@ fn dispatch_query(
     h3: &mut H3,
     pending: &mut HashMap<u64, Pending>,
     req_buf: &mut Vec<u8>,
+    rt: &mut Runtime,
     query: &[u8],
     peer: SocketAddr,
     now: Instant,
@@ -389,6 +538,7 @@ fn dispatch_query(
     let stream = match quic.open_bi() {
         Some(s) => s,
         None => {
+            rt.quality.on_failure();
             send_servfail(dns_sock, query, peer);
             return;
         }
@@ -417,7 +567,11 @@ fn dispatch_query(
         let b64_len = crate::base64url::encoded_len(query_ref.len());
         let mut b64 = vec![0u8; b64_len];
         crate::base64url::encode_into(query_ref, &mut b64);
-        let sep = if cfg.upstream.path.contains('?') { '&' } else { '?' };
+        let sep = if cfg.upstream.path.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
         let mut path = String::with_capacity(cfg.upstream.path.len() + 5 + b64_len);
         path.push_str(&cfg.upstream.path);
         path.push(sep);
@@ -449,10 +603,15 @@ fn dispatch_query(
     }
     if let Err(e) = quic.finish_stream(stream) {
         log::debug!("finish_stream {stream_idx}: {e}");
+        rt.quality.on_failure();
         send_servfail(dns_sock, query, peer);
         return;
     }
-    log::trace!("dispatch stream {stream_idx}: {} request bytes: {:02x?}", req_buf.len(), &req_buf[..req_buf.len().min(64)]);
+    log::trace!(
+        "dispatch stream {stream_idx}: {} request bytes: {:02x?}",
+        req_buf.len(),
+        &req_buf[..req_buf.len().min(64)]
+    );
     h3.register_request(stream_idx);
     pending.insert(
         stream_idx,
@@ -460,6 +619,7 @@ fn dispatch_query(
             query: query.to_vec(),
             peer,
             deadline: now + cfg.timeout,
+            started: now,
         },
     );
 }
@@ -476,6 +636,7 @@ fn process_quic_events(
     queue: &mut std::collections::VecDeque<QueuedQuery>,
     h3_events: &mut Vec<H3Event>,
     req_buf: &mut Vec<u8>,
+    rt: &mut Runtime,
     goaway: &mut bool,
     h3_ready: &mut bool,
     reconnect_at: &mut Option<Instant>,
@@ -487,20 +648,27 @@ fn process_quic_events(
             proto::Event::Connected => {
                 *backoff = Duration::ZERO;
                 *reconnect_at = None;
-                log::info!("quic: connected (0-rtt accepted: {})", quic.zero_rtt_accepted);
+                rt.fail_streak = 0;
+                log::info!(
+                    "quic: connected to {} (0-rtt offered: {}, accepted: {})",
+                    rt.my_remote,
+                    quic.zero_rtt_offered,
+                    quic.zero_rtt_accepted
+                );
                 if !*h3_ready {
                     // Transport parameters arrived: open the control stream
                     // first, then flush queued queries.
                     send_preamble(quic);
                     *h3_ready = true;
                     flush_queue(
-                        cfg, dns_sock, quic_sock, quic, h3, pending, queue, req_buf, now,
+                        cfg, dns_sock, quic_sock, quic, h3, pending, queue, req_buf, rt, now,
                     );
                 }
             }
             proto::Event::ConnectionLost { reason } => {
-                log::warn!("quic: connection lost: {reason}");
-                fail_all_pending(dns_sock, pending);
+                log::warn!("quic: connection lost on {}: {reason}", rt.my_remote);
+                rt.fail_streak = rt.fail_streak.saturating_add(1);
+                fail_all_pending(dns_sock, pending, rt);
                 quic.drop_conn();
                 *h3 = H3::new();
                 *goaway = false;
@@ -515,7 +683,11 @@ fn process_quic_events(
                 let (eof, read_err) = {
                     let ev_acc = &mut *h3_events;
                     quic.read_stream(id, |chunk| {
-                        log::trace!("stream {idx} rx {} bytes: {:02x?}", chunk.len(), &chunk[..chunk.len().min(300)]);
+                        log::trace!(
+                            "stream {idx} rx {} bytes: {:02x?}",
+                            chunk.len(),
+                            &chunk[..chunk.len().min(300)]
+                        );
                         h3.feed(idx, chunk, ev_acc);
                     })
                 };
@@ -535,7 +707,11 @@ fn process_quic_events(
             proto::Event::Stream(proto::StreamEvent::Stopped { id, error_code }) => {
                 // Peer sent STOP_SENDING for our request stream; the read
                 // side is unaffected — keep reading until EOF/reset.
-                log::trace!("stream {} stopped by peer, code {:?}", u64::from(id), error_code);
+                log::trace!(
+                    "stream {} stopped by peer, code {:?}",
+                    u64::from(id),
+                    error_code
+                );
             }
             _ => {}
         }
@@ -547,6 +723,8 @@ fn process_quic_events(
             H3Event::Response { stream, body } => {
                 log::trace!("h3: stream {stream} response {} bytes", body.len());
                 if let Some(p) = pending.remove(&stream) {
+                    rt.quality
+                        .on_success(now.saturating_duration_since(p.started));
                     let mut body = body;
                     if body.len() >= 2 && p.query.len() >= 2 {
                         body[0] = p.query[0];
@@ -560,6 +738,7 @@ fn process_quic_events(
             H3Event::Failed { stream } => {
                 log::debug!("h3: stream {stream} failed");
                 if let Some(p) = pending.remove(&stream) {
+                    rt.quality.on_failure();
                     send_servfail(dns_sock, &p.query, p.peer);
                 }
             }
@@ -580,19 +759,20 @@ fn process_quic_events(
     }
 }
 
-/// Periodic tasks: request expiry, shm adoption, reconnect.
+/// Periodic tasks: request expiry, score publication, upstream adoption and
+/// the weighted migration policy.
 #[allow(clippy::too_many_arguments)]
 fn housekeeping(
     cfg: &WorkerConfig,
     dns_sock: &UdpSocket,
     quic_sock: &UdpSocket,
     shm: &mut shared::ResolveReader,
+    scores: &shared::ScoreWriter,
     quic: &mut Quic,
     h3: &mut H3,
     pending: &mut HashMap<u64, Pending>,
     queue: &mut std::collections::VecDeque<QueuedQuery>,
-    remotes: &mut Vec<SocketAddr>,
-    remote_idx: &mut usize,
+    rt: &mut Runtime,
     goaway: &mut bool,
     h3_ready: &mut bool,
     reconnect_at: &mut Option<Instant>,
@@ -606,19 +786,24 @@ fn housekeeping(
         .collect();
     for k in expired {
         if let Some(p) = pending.remove(&k) {
+            rt.quality.on_failure();
             send_servfail(dns_sock, &p.query, p.peer);
         }
     }
 
-    // ── Adopt upstream addresses refreshed by the supervisor (lock-free) ──
-    if let Some(ips) = shm.read_if_changed() {
-        if !ips.is_empty() {
-            log::info!("adopting refreshed upstream addresses: {ips:?}");
-            *remotes = ips
-                .iter()
-                .map(|&ip| SocketAddr::new(ip, cfg.upstream.port))
-                .collect();
-            *remote_idx %= remotes.len();
+    // ── Adopt the supervisor's latest upstream set (lock-free) ──
+    // This only updates the weights the migration policy reads; it never
+    // forces a move, so a DNS TTL refresh cannot disturb the hot path.
+    if let Some(set) = shm.read_if_changed() {
+        if !set.addrs.is_empty() {
+            if set.addrs.iter().all(|a| *a != rt.my_remote.ip()) {
+                // Our address disappeared from the set: allow an immediate
+                // move (checked_sub: Instant arithmetic can overflow early in
+                // a process's life).
+                rt.last_migrate = now.checked_sub(MIGRATE_MIN_INTERVAL).unwrap_or(now);
+            }
+            rt.slot = set.slot_for(cfg.child_idx).unwrap_or(rt.slot);
+            rt.set = set;
         }
     }
 
@@ -626,15 +811,61 @@ fn housekeeping(
     while let Some(q) = queue.front() {
         if q.deadline <= now {
             let q = queue.pop_front().unwrap();
+            rt.quality.on_failure();
             send_servfail(dns_sock, &q.query, q.peer);
         } else {
             break;
         }
     }
 
+    // ── Publish this worker's measurement for the weight computation ──
+    if now.saturating_duration_since(rt.last_score) >= SCORE_INTERVAL {
+        let flags = if quic.has_conn() {
+            FLAG_CONNECTED
+                | if *h3_ready { 0 } else { FLAG_HANDSHAKING }
+                | if quic.zero_rtt_offered {
+                    FLAG_ZERO_RTT
+                } else {
+                    0
+                }
+        } else {
+            0
+        };
+        scores.write(&rt.quality.sample(Some(rt.my_remote.ip()), flags));
+        rt.quality.reset_window();
+        rt.last_score = now;
+    }
+
     // ── GOAWAY fully drained → reconnect ──
     if *goaway && pending.is_empty() {
         *reconnect_at = Some(now);
+    }
+
+    // ── Weighted migration: only when the assignment moved to something
+    // meaningfully better than the address we are already on. ──
+    if reconnect_at.is_none() {
+        if let Some(target) = migration_target(rt, cfg, now) {
+            log::info!(
+                "migrating {} -> {} (weight {} -> {}, fail_streak {})",
+                rt.my_remote,
+                target,
+                rt.current_weight(),
+                rt.set.weight_of(target),
+                rt.fail_streak
+            );
+            rt.my_remote = SocketAddr::new(target, cfg.upstream.port);
+            rt.slot = rt
+                .set
+                .addrs
+                .iter()
+                .position(|a| *a == target)
+                .unwrap_or(rt.slot);
+            rt.last_migrate = now;
+            rt.fail_streak = 0;
+            // The measurement window belongs to the old path.
+            rt.quality = Quality::new();
+            *reconnect_at = Some(now);
+        }
     }
 
     // ── Reconnect ──
@@ -650,37 +881,75 @@ fn housekeeping(
                 *h3_ready = false;
                 *goaway = false;
             }
-            // Pick the next remote matching the QUIC socket's family.
-            let sock_is_v6 = quic_sock
-                .local_addr()
-                .map(|a| a.is_ipv6())
-                .unwrap_or(false);
-            let mut tried = 0;
-            let remote = loop {
-                *remote_idx = (*remote_idx + 1) % remotes.len().max(1);
-                let r = remotes[*remote_idx];
-                tried += 1;
-                if r.is_ipv6() == sock_is_v6 || tried >= remotes.len() {
-                    break r;
-                }
-            };
-            if remote.is_ipv6() != sock_is_v6 {
-                log::error!("no remote matching socket family; retrying in 1s");
-                *reconnect_at = Some(now + Duration::from_secs(1));
-                return;
-            }
-            log::info!("quic: reconnecting to {remote}");
-            match connect_and_preamble(quic, now, remote, quic_sock) {
+            log::info!("quic: (re)connecting to {}", rt.my_remote);
+            match connect_and_preamble(quic, now, rt.my_remote, quic_sock) {
                 Ok(ready) => {
                     *h3_ready = ready;
                     *reconnect_at = None;
                 }
                 Err(e) => {
                     log::warn!("reconnect failed: {e}");
+                    rt.fail_streak = rt.fail_streak.saturating_add(1);
                     *reconnect_at = Some(now + Duration::from_secs(1));
                 }
             }
         }
+    }
+}
+
+/// The best alternative to `current`, by published weight.
+fn best_alternative(set: &UpstreamSet, current: IpAddr) -> Option<IpAddr> {
+    set.addrs
+        .iter()
+        .zip(set.weights.iter())
+        .filter(|(a, w)| **w > 0 && **a != current)
+        .max_by_key(|(_, w)| **w)
+        .map(|(a, _)| *a)
+}
+
+/// Decide whether to move to a different upstream address.
+///
+/// The weighted assignment says *where this worker should be*; this decides
+/// *whether moving is worth a handshake*. Staying put is the default: the hot
+/// path is a warm connection, and a migration throws away 0-RTT state and the
+/// congestion window. A move needs either a materially better address, or a
+/// connection that keeps failing.
+fn migration_target(rt: &mut Runtime, cfg: &WorkerConfig, now: Instant) -> Option<IpAddr> {
+    let current = rt.my_remote.ip();
+    let since_migrate = now.saturating_duration_since(rt.last_migrate);
+
+    // Repeated failures are the one case that justifies an early move.
+    if rt.fail_streak >= 2 {
+        if since_migrate < FAIL_MIGRATE_INTERVAL {
+            return None;
+        }
+        return best_alternative(&rt.set, current).filter(|t| *t != current);
+    }
+
+    if since_migrate < MIGRATE_MIN_INTERVAL {
+        return None;
+    }
+
+    // Stagger: after a new revision, worker i acts once i*STAGGER has passed,
+    // so the fleet never re-handshakes all at once.
+    let since_publish = shared::mono_secs().saturating_sub(rt.set.published_mono_secs);
+    if since_publish < MIGRATE_STAGGER.as_secs() * (rt.child_idx as u64 + 1) {
+        return None;
+    }
+
+    let slot = rt.set.slot_for(cfg.child_idx)?;
+    let target = *rt.set.addrs.get(slot)?;
+    if target == current {
+        return None;
+    }
+    // Hysteresis: only move for a materially better address, or when we are
+    // on one the supervisor has devalued to zero.
+    let current_w = rt.set.weight_of(current);
+    let target_w = rt.set.weight_of(target) as u64;
+    if current_w == 0 || target_w * 100 >= current_w as u64 * MIGRATE_RATIO_PCT {
+        Some(target)
+    } else {
+        None
     }
 }
 
@@ -691,8 +960,10 @@ fn send_servfail(sock: &UdpSocket, query: &[u8], peer: SocketAddr) {
     }
 }
 
-fn fail_all_pending(sock: &UdpSocket, pending: &mut HashMap<u64, Pending>) {
+/// Fail every in-flight request and count them against the current address.
+fn fail_all_pending(sock: &UdpSocket, pending: &mut HashMap<u64, Pending>, rt: &mut Runtime) {
     for (_, p) in pending.drain() {
+        rt.quality.on_failure();
         send_servfail(sock, &p.query, p.peer);
     }
 }

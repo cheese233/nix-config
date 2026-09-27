@@ -207,24 +207,13 @@
         echo "    forward-addr: 180.184.2.2"
       }
       {
-        # 0. Keep the DoH upstream's IPv6 out of the picture.
+        # NOTE: the DoH upstream is deliberately left with its own real AAAA
+        # records (no `dns64-ignore-aaaa`). microdoh3 therefore resolves
+        # $DOMAIN to native Cloudflare IPv6 and dials that; honk classifies UDP
+        # by destination, so a non-CN, non-NAT64 destination falls through to
+        # `fallback: proxy` and the DoH rides the subscription — which is the
+        # path that measured 0% loss here, versus 30-60% direct to Cloudflare.
         #
-        # The DoH upstream is Cloudflare-fronted, and this line's IPv6 route to
-        # Cloudflare drops ~30-60% of packets (IPv4 is clean), so microdoh3's
-        # QUIC/HTTP3 connection keeps retransmitting (PTO) and the first
-        # response for a foreign domain times out.
-        #
-        # microdoh3 resolves its upstream through this unbound instance and
-        # prefers IPv6, so make dns64 ignore the upstream's own (lossy) AAAA
-        # and synthesize from the A records instead. microdoh3 then dials
-        # 64:ff9b::<IPv4>, tayga translates that back to IPv4, and the DoH hop
-        # stays on the loss-free IPv4 path (measured ~0.75s vs ~2.4-6.2s over
-        # IPv6). Requires the dns64 module, i.e. module-config above.
-        #
-        # NOTE: this is a server: option, so the block must stay first and
-        # under its own `server:` header.
-        echo "server:"
-        echo "    dns64-ignore-aaaa: \"$DOMAIN.\""
         # 1. .local → avahi2dns mDNS bridge (127.0.0.1:5354)
         echo "stub-zone:"
         echo "    name: local."
@@ -298,6 +287,36 @@
   };
 
   # ==================== DNS-over-HTTP/3 client (microdoh3) ====================
+  #
+  # Upstream selection. Each worker owns exactly one QUIC connection (the hot
+  # path); every 2s it publishes the request-level RTT it measured as a score
+  # (1/RTT), and the supervisor turns those into per-address weights. The weighted slot
+  # assignment then splits the *fleet* across addresses in proportion — with 6
+  # workers, weights 3:2:1 really do place 3/2/1 workers — because unbound
+  # sends every query from a random source port, so SO_REUSEPORT spreads
+  # queries evenly over the workers. Nothing in the request path changes.
+  #
+  # A worker only migrates when its newly assigned address measures materially
+  # better (150% weight), at most once every 3 minutes, staggered by worker
+  # index, so the fleet never re-handshakes at once and a DNS TTL refresh
+  # cannot disturb a healthy connection. Measured on this line, individual edge
+  # addresses differ by more than 10x at the same instant (0.42s vs 5s
+  # timeouts), so the selection has real work to do even with two candidates.
+  #
+  # The candidate set is exactly what $DOMAIN resolves to (via unbound, hence
+  # under DNS control) — widen the pool by serving more addresses for the name;
+  # there is deliberately no client-side seed list. $DOMAIN keeps its real
+  # AAAA records, so the sockets are IPv6 towards Cloudflare's native anycast
+  # and honk's `fallback: proxy` carries them through the subscription.
+  #
+  # NOTE: --xps-cpus is deliberately NOT enabled. It is implemented (and the
+  # module exposes it), but enabling it here would give 12 workers instead of 6
+  # — these NICs expose 12 XPS queue CPUs, more than the 6 physical cores —
+  # while microdoh3's own sockets never meet those queues: queries arrive on
+  # loopback from unbound and the DoH egress leaves through the nat64 TUN and a
+  # single-queue ppp0. No locality to win, and doubling the upstream
+  # connections only adds handshakes. Turn on with
+  # `--xps-cpus --xps-interface enp2s0f1` if that topology changes.
   services.microdoh3 = {
     enable = true;
     package = inputs.microdoh3.packages.${pkgs.stdenv.hostPlatform.system}.microdoh3;
