@@ -58,11 +58,12 @@ pub struct Cli {
 
     /// Publish IPv4 candidates instead of IPv6 ones.
     ///
-    /// The candidate set is pinned to a single family, because a worker binds
-    /// its QUIC socket once, from the first published address, and never
-    /// rebinds. The default is IPv6-first (good on NAT64/DNS64 networks); this
-    /// flag selects the IPv4 half instead, which is what you want when the
-    /// IPv6 path to the upstream is the lossy one.
+    /// List IPv4 candidates before IPv6 ones.
+    ///
+    /// Both families are published and the scoring may move a worker between
+    /// them (the QUIC socket is dual-stack). This only sets the listing order,
+    /// which decides which family the exploration probes first — useful when
+    /// the IPv6 path to the upstream is the lossy one.
     #[arg(long)]
     pub prefer_ipv4: bool,
 
@@ -452,8 +453,6 @@ fn main() {
     let bootstrap_server = SocketAddr::new(bootstrap_dns, 53);
     let mut pending: Option<bootstrap::AsyncResolve> = None;
     let mut readable = false;
-    // Rotates which candidate gets the exploration share each round.
-    let mut probe_cursor: usize = 0;
     let mut next_weights = Instant::now() + WEIGHT_INTERVAL;
     loop {
         // 0. Spawn workers whose scheduled restart time has arrived.
@@ -592,8 +591,7 @@ fn main() {
                     })
                 })
                 .collect();
-            let fresh = compute_weights(&candidates, &samples, cpus.len(), probe_cursor);
-            probe_cursor = probe_cursor.wrapping_add(1);
+            let fresh = compute_weights(&candidates, &samples, cpus.len());
             if fresh != published {
                 let addrs: Vec<IpAddr> = fresh.iter().map(|(a, _)| *a).collect();
                 let weights: Vec<u32> = fresh.iter().map(|(_, w)| *w).collect();
@@ -677,19 +675,14 @@ fn schedule_child_exit(
 ///
 /// * A failed refresh must never wipe a working set, so an empty answer is
 ///   ignored (the previous resolution stays in force).
-/// * The list is pinned to a single address family — the family of the first
-///   address, which is what every worker binds its QUIC socket to. Publishing
-///   the other family would create candidates no worker can ever dial, and
-///   because they can never produce a score they would keep attracting the
-///   exploration share forever.
+/// * Both families are kept: a worker's socket is dual-stack, so the scoring is
+///   free to move it between an IPv4 and an IPv6 upstream. `prefer_ipv4` only
+///   decides the order addresses are listed in, which is the tie-break for the
+///   exploration order and nothing more.
 fn update_candidates(candidates: &mut Vec<IpAddr>, resolved: &[IpAddr], prefer_ipv4: bool) {
     let mut next: Vec<IpAddr> = resolved.to_vec();
     if prefer_ipv4 {
         next.sort_by_key(|a| a.is_ipv6());
-    }
-    if let Some(first) = next.first() {
-        let want_v6 = first.is_ipv6();
-        next.retain(|a| a.is_ipv6() == want_v6);
     }
     if next.len() > shared::MAX_ADDRS {
         next.truncate(shared::MAX_ADDRS);
@@ -707,10 +700,11 @@ fn update_candidates(candidates: &mut Vec<IpAddr>, resolved: &[IpAddr], prefer_i
 /// * keep the best score reported for each address;
 /// * give every address with no score a small floor, so an unmeasured or
 ///   currently-dead candidate still gets tried instead of dropping to zero;
-/// * hand one *rotating* address with no score a full extra share, so a pool
-///   with a dead member still cycles through it instead of pinning the same
-///   one. Once every candidate has a score this changes nothing, and the
-///   weights stop moving between rounds.
+/// * hand the first candidate *nobody has ever measured* a full extra share.
+///   That is deterministic and self-advancing: once it reports anything — even
+///   a zero score, i.e. "tried and failing" — the next unmeasured one gets the
+///   slot, so a broken candidate cannot hog it. Once everything has been
+///   measured the weights stop moving between rounds.
 ///
 /// Candidates come back best-first: the deterministic slot assignment walks the
 /// list, so ordering is what puts the highest worker indices on the probes.
@@ -718,13 +712,16 @@ fn compute_weights(
     candidates: &[IpAddr],
     samples: &[Option<shared::ScoreSample>],
     worker_count: usize,
-    probe_cursor: usize,
 ) -> Vec<(IpAddr, u32)> {
-    // Best score any worker reported for each candidate.
+    // Best score any worker reported for each candidate, and whether anyone
+    // has ever reported anything for it ("measured" ≠ "scores well": a
+    // candidate that was tried and keeps failing reports zero).
     let mut best = vec![0u32; candidates.len()];
+    let mut measured = vec![false; candidates.len()];
     for s in samples.iter().flatten() {
         let Some(addr) = s.addr else { continue };
         if let Some(i) = candidates.iter().position(|a| *a == addr) {
+            measured[i] = true;
             best[i] = best[i].max(s.score);
         }
     }
@@ -734,22 +731,16 @@ fn compute_weights(
     // Half a worker's share: enough that a pool larger than the fleet still
     // gets sampled, small enough that it cannot outvote what we measured.
     let floor = (top / (2 * workers)).max(1);
-    // One worker's share, given to a different candidate each round.
+    // One worker's share, for the first address nobody has measured.
     let one_slot = top / workers;
-    let probe = if candidates.is_empty() {
-        usize::MAX
-    } else {
-        probe_cursor % candidates.len()
-    };
+    let probe = measured.iter().position(|m| !*m);
 
     let mut out: Vec<(IpAddr, u32)> = candidates
         .iter()
         .enumerate()
         .map(|(i, a)| {
             let mut w = best[i].max(floor);
-            // Only an address we have no score for is worth an extra probe:
-            // probing a measured one would just shuffle the fleet every round.
-            if i == probe && best[i] == 0 {
+            if Some(i) == probe {
                 w = w.saturating_add(one_slot);
             }
             (*a, w)
@@ -932,25 +923,22 @@ mod tests {
     }
 
     #[test]
-    fn candidates_are_pinned_to_one_family() {
-        // Default order (IPv6 first) keeps only the IPv6 half…
+    fn candidates_keep_both_families() {
         let mut c = Vec::new();
         let resolved: Vec<IpAddr> = vec![
             "2606:4700::1".parse().unwrap(),
             "104.21.63.104".parse().unwrap(),
             "172.67.170.142".parse().unwrap(),
         ];
+        // Default listing order is IPv6-first…
         update_candidates(&mut c, &resolved, false);
-        assert_eq!(c, vec!["2606:4700::1".parse::<IpAddr>().unwrap()]);
-        // …and --prefer-ipv4 flips which half that is.
+        assert_eq!(c, resolved);
+        // …and --prefer-ipv4 only reorders, it never drops a family: the
+        // selection may move a worker across families at any time.
         update_candidates(&mut c, &resolved, true);
-        assert_eq!(
-            c,
-            vec![
-                "104.21.63.104".parse::<IpAddr>().unwrap(),
-                "172.67.170.142".parse::<IpAddr>().unwrap()
-            ]
-        );
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[0], "104.21.63.104".parse::<IpAddr>().unwrap());
+        assert!(c[2].is_ipv6());
     }
 
     /// A worker sitting on `addr` having reported `score`.
@@ -987,7 +975,7 @@ mod tests {
             Some(sample("10.0.0.1", shared::score_from_rtt(20_000))),
             Some(sample("10.0.0.2", shared::score_from_rtt(400_000))),
         ];
-        let w = compute_weights(&candidates, &samples, 6, 0);
+        let w = compute_weights(&candidates, &samples, 6);
         assert_eq!(w[0].0, "10.0.0.1".parse::<IpAddr>().unwrap());
         assert!(w[0].1 > w[1].1, "faster must outrank slower: {w:?}");
         let s = slots(&w, 6);
@@ -1003,7 +991,7 @@ mod tests {
             .collect();
         // Only the first address has ever produced a score.
         let samples = vec![Some(sample("10.0.0.1", shared::score_from_rtt(20_000)))];
-        let w = compute_weights(&candidates, &samples, 6, 0);
+        let w = compute_weights(&candidates, &samples, 6);
         assert!(
             w.iter().all(|(_, x)| *x > 0),
             "no candidate may drop to zero: {w:?}"
@@ -1029,28 +1017,40 @@ mod tests {
             Some(sample("10.0.0.1", shared::score_from_rtt(20_000))),
             Some(sample("10.0.0.2", 0)),
         ];
-        let w = compute_weights(&candidates, &samples, 6, 99); // probe elsewhere
+        let w = compute_weights(&candidates, &samples, 6);
         assert_eq!(w[0].0, "10.0.0.1".parse::<IpAddr>().unwrap());
         let s = slots(&w, 6);
         assert!(s.iter().filter(|i| **i == 0).count() > 3, "{s:?}");
     }
 
     #[test]
-    fn the_probe_share_rotates_over_unmeasured_addresses() {
+    fn the_probe_goes_to_the_first_unmeasured_candidate() {
         let candidates: Vec<IpAddr> = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
             .iter()
             .map(|s| s.parse().unwrap())
             .collect();
-        let samples = vec![Some(sample("10.0.0.1", shared::score_from_rtt(20_000)))];
         let weight_of =
             |w: &Vec<(IpAddr, u32)>, s: &str| w.iter().find(|(a, _)| a.to_string() == s).unwrap().1;
-        // Only .1 has ever been measured, so .2/.3 are the ones worth probing.
-        // Cursor 1 promotes .2, cursor 2 promotes .3: the extra share moves on,
-        // so a dead address cannot hog the probe forever.
-        let c1 = compute_weights(&candidates, &samples, 6, 1);
-        let c2 = compute_weights(&candidates, &samples, 6, 2);
-        assert!(weight_of(&c1, "10.0.0.2") > weight_of(&c1, "10.0.0.3"));
-        assert!(weight_of(&c2, "10.0.0.3") > weight_of(&c2, "10.0.0.2"));
+
+        // Only .1 measured so far: the first unmeasured one (.2) is promoted.
+        let a = compute_weights(
+            &candidates,
+            &[Some(sample("10.0.0.1", shared::score_from_rtt(20_000)))],
+            6,
+        );
+        assert!(weight_of(&a, "10.0.0.2") > weight_of(&a, "10.0.0.3"));
+
+        // Once .2 has reported *anything* — here "tried and failing", score 0 —
+        // the probe advances to .3 instead of retrying .2 forever.
+        let b = compute_weights(
+            &candidates,
+            &[
+                Some(sample("10.0.0.1", shared::score_from_rtt(20_000))),
+                Some(sample("10.0.0.2", 0)),
+            ],
+            6,
+        );
+        assert!(weight_of(&b, "10.0.0.3") > weight_of(&b, "10.0.0.2"));
     }
 
     #[test]
@@ -1066,8 +1066,8 @@ mod tests {
         // No unmeasured candidate => the probe cursor is irrelevant, so the
         // supervisor stops republishing and the fleet stops re-evaluating.
         assert_eq!(
-            compute_weights(&candidates, &samples, 6, 0),
-            compute_weights(&candidates, &samples, 6, 1)
+            compute_weights(&candidates, &samples, 6),
+            compute_weights(&candidates, &samples, 6)
         );
     }
 
@@ -1080,8 +1080,8 @@ mod tests {
         let samples = vec![Some(sample("10.0.0.1", shared::score_from_rtt(20_000)))];
         // The supervisor only republishes when this changes.
         assert_eq!(
-            compute_weights(&candidates, &samples, 6, 3),
-            compute_weights(&candidates, &samples, 6, 3)
+            compute_weights(&candidates, &samples, 6),
+            compute_weights(&candidates, &samples, 6)
         );
     }
 
@@ -1092,7 +1092,7 @@ mod tests {
             .map(|s| s.parse().unwrap())
             .collect();
         let samples = vec![None, None];
-        let w = compute_weights(&candidates, &samples, 6, 0);
+        let w = compute_weights(&candidates, &samples, 6);
         assert_eq!(w[0].1, w[1].1);
         let s = slots(&w, 6);
         assert_eq!(s.iter().filter(|i| **i == 0).count(), 3);

@@ -159,9 +159,9 @@ struct Runtime {
 
 impl Runtime {
     fn new(set: UpstreamSet, cfg: &WorkerConfig, now: Instant) -> Self {
-        // The supervisor publishes a single-family candidate set (the family
-        // is whichever address comes first), and the socket is bound from it
-        // here and never rebound, so worker and supervisor always agree.
+        // The slot may be of either family: the QUIC socket is dual-stack, so
+        // this worker can be moved between an IPv4 and an IPv6 upstream later
+        // without rebinding anything.
         let slot = set.slot_for(cfg.child_idx).unwrap_or(0);
         let my_remote = SocketAddr::new(set.addrs[slot], cfg.upstream.port);
         Self {
@@ -231,16 +231,43 @@ fn bind_dns_socket(addr: SocketAddr, busy_poll: bool) -> io::Result<UdpSocket> {
     Ok(fd.into())
 }
 
-/// Bind the QUIC client UDP socket matching the remote's family.
-fn bind_quic_socket(remote: &SocketAddr) -> io::Result<UdpSocket> {
-    let any: SocketAddr = if remote.is_ipv6() {
-        "[::]:0".parse().unwrap()
-    } else {
-        "0.0.0.0:0".parse().unwrap()
-    };
-    let sock = UdpSocket::bind(any)?;
-    sock.set_nonblocking(true)?;
-    Ok(sock)
+/// Bind the QUIC client UDP socket: dual-stack when the host allows it.
+///
+/// A worker owns one socket for its whole life, and the addresses it may be
+/// handed are chosen by measured quality rather than by family — so the socket
+/// must be able to reach both. `IPV6_V6ONLY` has to be cleared *before* bind(),
+/// which is why this builds the socket by hand instead of `UdpSocket::bind`.
+///
+/// Hosts without IPv6 fall back to an IPv4 socket; then only IPv4 upstream
+/// addresses are reachable, which the scoring handles on its own (the others
+/// never produce a score and sink to the probe floor).
+fn bind_quic_socket() -> io::Result<UdpSocket> {
+    match bind_dual_stack() {
+        Ok(sock) => Ok(sock),
+        Err(e) => {
+            log::warn!("dual-stack QUIC socket unavailable ({e}); falling back to IPv4 only");
+            let sock = UdpSocket::bind("0.0.0.0:0")?;
+            sock.set_nonblocking(true)?;
+            Ok(sock)
+        }
+    }
+}
+
+fn bind_dual_stack() -> io::Result<UdpSocket> {
+    use nix::sys::socket::*;
+    let fd = socket(
+        AddressFamily::Inet6,
+        SockType::Datagram,
+        SockFlag::SOCK_NONBLOCK | SockFlag::SOCK_CLOEXEC,
+        None,
+    )?;
+    setsockopt(&fd, sockopt::Ipv6V6Only, &false)?;
+    let any: SocketAddr = "[::]:0".parse().unwrap();
+    match any {
+        SocketAddr::V6(v6) => bind(fd.as_raw_fd(), &SockaddrIn6::from(v6))?,
+        SocketAddr::V4(_) => unreachable!("literal is IPv6"),
+    }
+    Ok(fd.into())
 }
 
 /// One child process. Never returns under normal operation.
@@ -274,7 +301,7 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
         rt.my_remote
     );
 
-    let quic_sock = bind_quic_socket(&rt.my_remote)?;
+    let quic_sock = bind_quic_socket()?;
     let udp_state = Quic::init_socket(&quic_sock)?;
     let client_config = quic::build_client_config(KEEP_ALIVE, IDLE_TIMEOUT)?;
     let mut quic = Quic::new(client_config, cfg.upstream.host.clone(), udp_state);
@@ -918,12 +945,17 @@ fn migration_target(rt: &mut Runtime, cfg: &WorkerConfig, now: Instant) -> Optio
     let current = rt.my_remote.ip();
     let since_migrate = now.saturating_duration_since(rt.last_migrate);
 
-    // Repeated failures are the one case that justifies an early move.
+    // Repeated failures are the one case that justifies an early move — but
+    // only to an address that is *known* to be better. With every candidate
+    // sitting at the same floor weight, moving is a coin flip between two
+    // unmeasured addresses that just burns handshakes.
     if rt.fail_streak >= 2 {
         if since_migrate < FAIL_MIGRATE_INTERVAL {
             return None;
         }
-        return best_alternative(&rt.set, current).filter(|t| *t != current);
+        let current_weight = rt.set.weight_of(current);
+        let alt = best_alternative(&rt.set, current)?;
+        return (rt.set.weight_of(alt) > current_weight).then_some(alt);
     }
 
     if since_migrate < MIGRATE_MIN_INTERVAL {

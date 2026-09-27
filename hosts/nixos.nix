@@ -306,8 +306,10 @@
   # The candidate set is exactly what $DOMAIN resolves to (via unbound, hence
   # under DNS control) — widen the pool by serving more addresses for the name;
   # there is deliberately no client-side seed list. $DOMAIN keeps its real
-  # AAAA records, so the sockets are IPv6 towards Cloudflare's native anycast
-  # and honk's `fallback: proxy` carries them through the subscription.
+  # AAAA and A records, so both families are candidates and the workers'
+  # dual-stack sockets can reach either: a honk rule matches IPv4/v6 by
+  # destination, so the two families take different paths (NAT64 direct vs
+  # `fallback: proxy`) and the scoring picks whichever measures better.
   #
   # NOTE: --xps-cpus is deliberately NOT enabled. It is implemented (and the
   # module exposes it), but enabling it here would give 12 workers instead of 6

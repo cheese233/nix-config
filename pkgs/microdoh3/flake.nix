@@ -59,13 +59,13 @@
               type = lib.types.bool;
               default = false;
               description = ''
-                Publish IPv4 candidates instead of IPv6 ones.
+                List IPv4 candidates before IPv6 ones.
 
-                The candidate set is pinned to a single address family — a
-                worker binds its QUIC socket once and never rebinds — and the
-                default is IPv6-first, which is right on NAT64/DNS64-only
-                networks. Set this to select the IPv4 half instead, e.g. when
-                the IPv6 path to the upstream is the lossy one.
+                Both families are published and the weighted selection can move
+                a worker between them (the QUIC socket is dual-stack); this only
+                sets the listing order, which decides which family the
+                exploration probes first. Useful when the IPv6 path to the
+                upstream is the lossy one.
               '';
             };
 

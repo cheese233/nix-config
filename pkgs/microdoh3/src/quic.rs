@@ -5,7 +5,7 @@
 //! datagrams and QUIC state-machine calls, with GRO/GSO batching via noq-udp.
 
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -275,9 +275,14 @@ impl Quic {
             // Process everything received so far, then loop for more.
             for (meta, data) in datagrams.drain(..) {
                 self.response_scratch.clear();
+                // The QUIC socket is dual-stack, and Linux reports a peer of
+                // the other family in its mapped form (::ffff:a.b.c.d) — but
+                // connections are opened with the plain address the upstream
+                // set holds. Map it back, otherwise the datagram does not match
+                // the connection it belongs to and the reply is dropped.
                 let event = self.endpoint.handle(
                     now,
-                    proto::FourTuple::new(meta.addr, meta.dst_ip),
+                    proto::FourTuple::new(unmap_addr(meta.addr), meta.dst_ip.map(unmap_ip)),
                     meta.ecn.map(ecn_to_proto),
                     data,
                     &mut self.response_scratch,
@@ -411,6 +416,29 @@ impl Quic {
     }
 }
 
+/// Undo a v4-mapped IPv6 address (`::ffff:a.b.c.d` → `a.b.c.d`); anything else
+/// is returned unchanged.
+fn unmap_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(v6),
+        },
+        v4 => v4,
+    }
+}
+
+/// [`unmap_ip`] for a whole socket address.
+fn unmap_addr(addr: SocketAddr) -> SocketAddr {
+    match addr {
+        SocketAddr::V6(v6) => match v6.ip().to_ipv4_mapped() {
+            Some(v4) => SocketAddr::new(IpAddr::V4(v4), v6.port()),
+            None => SocketAddr::V6(v6),
+        },
+        v4 => v4,
+    }
+}
+
 fn ecn_to_proto(e: noq_udp::EcnCodepoint) -> proto::EcnCodepoint {
     match e {
         noq_udp::EcnCodepoint::Ect0 => proto::EcnCodepoint::Ect0,
@@ -424,5 +452,37 @@ fn ecn_to_udp(e: proto::EcnCodepoint) -> noq_udp::EcnCodepoint {
         proto::EcnCodepoint::Ect0 => noq_udp::EcnCodepoint::Ect0,
         proto::EcnCodepoint::Ect1 => noq_udp::EcnCodepoint::Ect1,
         proto::EcnCodepoint::Ce => noq_udp::EcnCodepoint::Ce,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn v4_mapped_addresses_are_unmapped() {
+        // The form a dual-stack socket reports for an IPv4 peer.
+        let mapped: SocketAddr = "[::ffff:104.21.63.104]:443".parse().unwrap();
+        assert_eq!(
+            unmap_addr(mapped),
+            "104.21.63.104:443".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            unmap_ip("::ffff:172.67.170.142".parse().unwrap()),
+            "172.67.170.142".parse::<IpAddr>().unwrap()
+        );
+    }
+
+    #[test]
+    fn real_ipv6_addresses_are_left_alone() {
+        let v6: SocketAddr = "[2606:4700:3031::6815:3f68]:443".parse().unwrap();
+        assert_eq!(unmap_addr(v6), v6);
+        // …and so are plain IPv4 addresses.
+        let v4: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        assert_eq!(unmap_addr(v4), v4);
+        assert_eq!(
+            unmap_ip("8.8.8.8".parse().unwrap()),
+            "8.8.8.8".parse::<IpAddr>().unwrap()
+        );
     }
 }

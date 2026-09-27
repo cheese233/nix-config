@@ -156,12 +156,14 @@ microdoh3 --xps-cpus --xps-interface enp2s0f1 --upstream https://dns.google/dns-
 - The HTTP/3 layer implements the client subset needed for DoH: control
   stream + SETTINGS (QPACK dynamic table disabled), one request stream per
   query, GOAWAY handling. No server push, no trailers semantics.
-- The published candidate set is pinned to **one address family**: the family
-  of the first address, which is what every worker binds its QUIC socket to.
-  The default order is IPv6-first (works well on IPv6-only / NAT64 networks);
-  `--prefer-ipv4` selects the IPv4 half instead, which is what you want when
-  the IPv6 path to the upstream is lossy. Addresses of the other family are
-  dropped — no worker could dial them, and they could never produce a score.
+- The candidate set may span **both address families**. Each worker owns one
+  dual-stack UDP socket (`IPV6_V6ONLY` cleared before `bind`), so the weighted
+  selection can move it between an IPv4 and an IPv6 upstream, and the two can be
+  compared on measured quality like any other pair of addresses. IPv4 peers
+  arrive on that socket in their v4-mapped form, which `quic::poll_socket` maps
+  back before matching the datagram against its connection. `--prefer-ipv4`
+  only changes the listing order (which family the exploration probes first);
+  it no longer restricts what the fleet may use.
 - `--xps-cpus` aligns workers with NIC TX queues. It only helps when the
   workers' sockets actually traverse those queues: traffic that enters or
   leaves through a TUN, a bridge or a single-queue PPP device has no queue to
