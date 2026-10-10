@@ -575,7 +575,7 @@
         dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
 
         domain(geosite: google-cn) -> proxy
-        domain(full: dash.cloudflare.com) -> resident
+        domain(full: dash.cloudflare.com, suffix: withpersona.com) -> resident
         domain(full: google.com, full: www.google.com) -> resident
         domain(geosite: facebook) -> resident
         domain(geosite: openai, geosite: anthropic, geosite: xai, geosite: google-gemini) -> resident
