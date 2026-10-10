@@ -20,11 +20,21 @@ supervisor (sole bootstrap-DNS resolver, fork × N, waitpid, restart w/ backoff;
  │   memfd #1 "resolve" (seqlock): candidate addrs + weights  → children RO
  │   memfd #2 "scores"  (seqlock): one slot per worker        ← children RW
  └── child i: pinned to CPU
-      ├── SO_REUSEPORT DNS socket (kernel load-balancing)
+      ├── SO_REUSEPORT DNS socket, bound only while it has use for it
       ├── exactly ONE QUIC connection upstream (persistent, keep-alive)
       ├── writes its measured RTT/loss into score slot i
       └── one epoll set: [dns_sock, quic_sock, timerfd, signal pipe]
 ```
+
+`SO_REUSEPORT` picks the socket by hashing the client's flow, and a resolver
+retrying a failed query reuses that flow — so a worker that kept its socket
+while it was reconnecting would answer every retry itself, for as long as the
+reconnect lasts. Instead a worker binds its DNS socket only while it can
+actually open a request stream (`quic.has_conn() && h3_ready`): while it is
+reconnecting or still handshaking it is *out* of the kernel's reuseport group,
+and the kernel rehashes its share of the traffic onto peers that can serve it.
+That socket is also what replies are sent from, so a worker fails what is in
+flight (SERVFAIL with the echoed question) before it leaves.
 
 Everything in the request path runs on one thread per core — no channels,
 no context switches. All bootstrap DNS — startup resolution and TTL
@@ -84,7 +94,11 @@ refresh updates the weights and nothing else.
   timeouts, keep-alive, TTL refresh).
 - **Fast-fail SERVFAIL** — pending clients get an immediate SERVFAIL (with
   echoed question) on upstream timeout or connection loss, so local
-  resolvers retry instantly instead of waiting out their own timeout.
+  resolvers retry instantly instead of waiting out their own timeout. A worker
+  that is reconnecting or still handshaking is out of the reuseport group
+  entirely, so those retries reach a peer instead of coming back to the same
+  socket; a GOAWAY drain is bounded (see the notes), so it cannot become a
+  long-lived version of the same trap.
 - Optional: `--busy-poll` (SO_BUSY_POLL), `--spin` (epoll pre-sweep),
   `--mlockall`.
 
@@ -148,6 +162,12 @@ microdoh3 --xps-cpus --xps-interface enp2s0f1 --upstream https://dns.google/dns-
   server policy is not mistaken for a client bug.
 - **0-RTT replay**: early data can be replayed by a network attacker; DNS
   queries are idempotent, so this is acceptable here.
+- **GOAWAY drains are bounded** (1s). While a worker drains it still holds the
+  listen socket, because that is how the in-flight replies are sent — so the
+  kernel keeps routing new queries to it and each is answered SERVFAIL, whose
+  retries hash back to the same socket. A drain is worth about one slow round
+  trip and no more: after `GOAWAY_DRAIN_MAX` whatever is still in flight is
+  failed, and the worker reconnects and rejoins the group.
 - Known limitation: when a server *does* advertise early data and then rejects
   it, noq resets the 0-RTT streams and microdoh3 answers SERVFAIL for those
   queries instead of re-dispatching them over the 1-RTT handshake. unbound

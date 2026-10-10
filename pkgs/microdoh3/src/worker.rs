@@ -188,17 +188,83 @@ impl Runtime {
     }
 }
 
-/// A validated query received while the connection is handshaking
-/// (streams can't open until the server's transport parameters arrive,
-/// unless 0-RTT restored them).
-struct QueuedQuery {
-    query: Vec<u8>,
-    peer: SocketAddr,
-    deadline: Instant,
+/// A worker whose connection is draining after a GOAWAY may keep answering the
+/// requests already in flight, but only for this long.
+///
+/// While it drains, the kernel still routes new queries to it (it holds the
+/// listen socket, because that is also how the pending replies are sent) and
+/// every one of them is answered SERVFAIL — whose retries hash, via
+/// `SO_REUSEPORT`, back to the same socket. The drain is therefore worth about
+/// one slow round trip; after it, what is left in flight is failed and the
+/// worker reconnects and rejoins the group.
+const GOAWAY_DRAIN_MAX: Duration = Duration::from_secs(1);
+
+/// The worker's DNS listen socket — deliberately *not* bound for the whole
+/// process lifetime.
+///
+/// `SO_REUSEPORT` picks a socket by hashing the client's flow (source address
+/// *and* source port), and a resolver retrying a failed query reuses that flow.
+/// A worker that stays in the group while it cannot serve therefore answers
+/// every retry with another SERVFAIL — the kernel keeps handing it the same
+/// flow — until its reconnect completes. Closing the socket takes it out of the
+/// kernel's reuseport group, which rehashes that flow onto a peer that can
+/// serve it; the worker joins again as soon as it can open request streams.
+///
+/// The socket is also how replies are sent, so leaving the group is only safe
+/// once nothing is in flight any more; `sync_listen` fails what is in hand
+/// first.
+struct ListenSocket {
+    sock: Option<UdpSocket>,
 }
 
-/// Max queries queued while handshaking; overflow gets SERVFAIL.
-const MAX_QUEUED: usize = 64;
+impl ListenSocket {
+    fn unbound() -> Self {
+        Self { sock: None }
+    }
+
+    /// Join the reuseport group on `listen` (no-op when already bound).
+    fn join(&mut self, listen: SocketAddr, busy_poll: bool, poller: &Poller) -> io::Result<()> {
+        if self.sock.is_some() {
+            return Ok(());
+        }
+        let sock = bind_dns_socket(listen, busy_poll)?;
+        poller.add_socket(&sock, TOKEN_DNS)?;
+        log::info!("worker {} listening on {listen}", std::process::id());
+        self.sock = Some(sock);
+        Ok(())
+    }
+
+    /// Leave the reuseport group. Closing the fd also removes it from the epoll
+    /// set and discards whatever is still queued in its receive buffer.
+    fn leave(&mut self) {
+        if self.sock.take().is_some() {
+            log::info!(
+                "worker {} left the reuseport group (cannot serve right now)",
+                std::process::id()
+            );
+        }
+    }
+
+    fn is_bound(&self) -> bool {
+        self.sock.is_some()
+    }
+
+    /// Best-effort reply. Out of the group there is no socket to reply on — and
+    /// no query either: the kernel only routes to bound sockets.
+    fn send_to(&self, buf: &[u8], peer: SocketAddr) -> io::Result<()> {
+        match &self.sock {
+            Some(sock) => sock.send_to(buf, peer).map(|_| ()),
+            None => Ok(()),
+        }
+    }
+
+    fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        match &self.sock {
+            Some(sock) => sock.recv_from(buf),
+            None => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+        }
+    }
+}
 
 /// Open the DNS listen socket: SO_REUSEPORT, non-blocking, big buffers.
 fn bind_dns_socket(addr: SocketAddr, busy_poll: bool) -> io::Result<UdpSocket> {
@@ -284,9 +350,6 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
         let _ = mlockall(MlockAllFlags::MCL_CURRENT | MlockAllFlags::MCL_FUTURE);
     }
 
-    let dns_sock = bind_dns_socket(cfg.listen, cfg.busy_poll)?;
-    log::info!("worker {} listening on {dns_sock:?}", std::process::id());
-
     // Read upstream addresses and their selection weights from the
     // supervisor's shared page (read-only here).
     let mut shm = shared::ResolveReader::map_readonly(cfg.shm_fd)?;
@@ -313,12 +376,10 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     let mut quic = Quic::new(client_config, cfg.upstream.host.clone(), udp_state);
 
     let poller = Poller::new()?;
-    poller.add_socket(&dns_sock, TOKEN_DNS)?;
     poller.add_socket(&quic_sock, TOKEN_QUIC)?;
 
     let mut h3 = H3::new();
     let mut pending: HashMap<u64, Pending> = HashMap::new();
-    let mut queue: std::collections::VecDeque<QueuedQuery> = Default::default();
     let mut h3_events: Vec<H3Event> = Vec::with_capacity(8);
     let mut goaway = false;
     let mut reconnect_at: Option<Instant> = None;
@@ -329,6 +390,12 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
     // Streams can open immediately only with remembered (0-RTT) transport
     // parameters; otherwise wait for the Connected event.
     let mut h3_ready = connect_and_preamble(&mut quic, now, rt.my_remote, &quic_sock)?;
+    // The listen socket enters the reuseport group only once this worker can
+    // actually open a request stream (see `ListenSocket`).
+    let mut dns_sock = ListenSocket::unbound();
+    if h3_ready {
+        dns_sock.join(cfg.listen, cfg.busy_poll, &poller)?;
+    }
 
     let mut events = [nix::sys::epoll::EpollEvent::empty(); 16];
     let mut shutdown = false;
@@ -341,9 +408,6 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
         }
         if let Some(d) = pending.values().map(|p| p.deadline).min() {
             next = Some(next.map_or(d, |n| n.min(d)));
-        }
-        if let Some(q) = queue.front() {
-            next = Some(next.map_or(q.deadline, |n| n.min(q.deadline)));
         }
         poller.arm_timer(next)?;
 
@@ -359,7 +423,6 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
                     &mut quic,
                     &mut h3,
                     &mut pending,
-                    &mut queue,
                     &mut req_buf,
                     &mut rt,
                     goaway,
@@ -371,15 +434,11 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
                         log::warn!("quic socket error: {e}");
                     }
                     process_quic_events(
-                        &cfg,
                         &dns_sock,
-                        &quic_sock,
                         &mut quic,
                         &mut h3,
                         &mut pending,
-                        &mut queue,
                         &mut h3_events,
-                        &mut req_buf,
                         &mut rt,
                         &mut goaway,
                         &mut h3_ready,
@@ -400,7 +459,6 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
                         &mut quic,
                         &mut h3,
                         &mut pending,
-                        &mut queue,
                         &mut rt,
                         &mut goaway,
                         &mut h3_ready,
@@ -429,6 +487,20 @@ pub fn run(cfg: WorkerConfig) -> Result<(), Box<dyn std::error::Error>> {
             reconnect_at.get_or_insert(now + backoff);
         }
 
+        // Keep the listen socket in the reuseport group exactly while this
+        // worker can serve. A worker that is reconnecting or still handshaking
+        // can only answer SERVFAIL — and `SO_REUSEPORT` would keep feeding it
+        // the retries of that same client flow — so it waits outside the group
+        // until it has a connection it can open request streams on.
+        sync_listen(
+            &cfg,
+            &poller,
+            &mut dns_sock,
+            &mut pending,
+            &mut rt,
+            accepting(quic.has_conn(), h3_ready),
+        );
+
         if let Err(e) = quic.flush(now, &quic_sock) {
             log::debug!("flush: {e}");
         }
@@ -450,25 +522,31 @@ fn connect_and_preamble(
     sock: &UdpSocket,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     quic.connect(now, remote, sock)?;
-    let ready = quic.has_0rtt();
-    if ready {
-        send_preamble(quic);
-    }
+    // Remembered transport parameters let request streams open before the
+    // handshake completes — but only once the control stream is open; if that
+    // fails, wait for Connected and retry there.
+    let ready = quic.has_0rtt() && send_preamble(quic);
     quic.flush(now, sock)?;
     Ok(ready)
 }
 
 /// Send the H3 client preamble on the first client uni stream.
-/// Must be called before opening any request stream.
-fn send_preamble(quic: &mut Quic) {
+/// Must be called before opening any request stream. Returns whether the
+/// connection is ready for requests.
+fn send_preamble(quic: &mut Quic) -> bool {
     match quic.open_control_uni() {
         Some(ctrl) => {
             if let Err(e) = quic.write_all(ctrl, &h3::client_preamble()) {
                 log::warn!("write preamble: {e}");
+                return false;
             }
             // Control stream stays open for the connection lifetime (no FIN).
+            true
         }
-        None => log::warn!("could not open control stream"),
+        None => {
+            log::warn!("could not open control stream");
+            false
+        }
     }
 }
 
@@ -476,12 +554,11 @@ fn send_preamble(quic: &mut Quic) {
 #[allow(clippy::too_many_arguments)]
 fn drain_dns(
     cfg: &WorkerConfig,
-    dns_sock: &UdpSocket,
+    dns_sock: &ListenSocket,
     quic_sock: &UdpSocket,
     quic: &mut Quic,
     h3: &mut H3,
     pending: &mut HashMap<u64, Pending>,
-    queue: &mut std::collections::VecDeque<QueuedQuery>,
     req_buf: &mut Vec<u8>,
     rt: &mut Runtime,
     goaway: bool,
@@ -500,23 +577,15 @@ fn drain_dns(
             continue;
         }
 
-        if goaway || !quic.has_conn() {
+        if goaway || !accepting(quic.has_conn(), h3_ready) {
+            // Nothing received right now can be served: the worker is
+            // reconnecting, still handshaking, or draining after GOAWAY. Fail
+            // fast so the resolver retries immediately instead of waiting out
+            // its own timeout — and in the reconnecting and handshaking states
+            // this worker is out of the reuseport group, so that retry reaches
+            // a peer instead of coming back here.
             rt.quality.on_failure();
             send_servfail(dns_sock, query, peer);
-            continue;
-        }
-        if !h3_ready {
-            // Handshake in progress: queue briefly (the handshake is ~1 RTT).
-            if queue.len() >= MAX_QUEUED {
-                rt.quality.on_failure();
-                send_servfail(dns_sock, query, peer);
-            } else {
-                queue.push_back(QueuedQuery {
-                    query: query.to_vec(),
-                    peer,
-                    deadline: now + cfg.timeout,
-                });
-            }
             continue;
         }
         dispatch_query(
@@ -526,38 +595,11 @@ fn drain_dns(
     let _ = quic.flush(now, quic_sock);
 }
 
-/// Flush queued queries once the connection is ready.
-#[allow(clippy::too_many_arguments)]
-fn flush_queue(
-    cfg: &WorkerConfig,
-    dns_sock: &UdpSocket,
-    quic_sock: &UdpSocket,
-    quic: &mut Quic,
-    h3: &mut H3,
-    pending: &mut HashMap<u64, Pending>,
-    queue: &mut std::collections::VecDeque<QueuedQuery>,
-    req_buf: &mut Vec<u8>,
-    rt: &mut Runtime,
-    now: Instant,
-) {
-    while let Some(q) = queue.pop_front() {
-        if q.deadline <= now {
-            rt.quality.on_failure();
-            send_servfail(dns_sock, &q.query, q.peer);
-            continue;
-        }
-        dispatch_query(
-            cfg, dns_sock, quic, h3, pending, req_buf, rt, &q.query, q.peer, now,
-        );
-    }
-    let _ = quic.flush(now, quic_sock);
-}
-
 /// Submit one validated DNS query to the DoH upstream over a new H3 stream.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_query(
     cfg: &WorkerConfig,
-    dns_sock: &UdpSocket,
+    dns_sock: &ListenSocket,
     quic: &mut Quic,
     h3: &mut H3,
     pending: &mut HashMap<u64, Pending>,
@@ -660,15 +702,11 @@ fn dispatch_query(
 /// Drain QUIC application events and route stream data through H3.
 #[allow(clippy::too_many_arguments)]
 fn process_quic_events(
-    cfg: &WorkerConfig,
-    dns_sock: &UdpSocket,
-    quic_sock: &UdpSocket,
+    dns_sock: &ListenSocket,
     quic: &mut Quic,
     h3: &mut H3,
     pending: &mut HashMap<u64, Pending>,
-    queue: &mut std::collections::VecDeque<QueuedQuery>,
     h3_events: &mut Vec<H3Event>,
-    req_buf: &mut Vec<u8>,
     rt: &mut Runtime,
     goaway: &mut bool,
     h3_ready: &mut bool,
@@ -689,13 +727,12 @@ fn process_quic_events(
                     quic.zero_rtt_accepted
                 );
                 if !*h3_ready {
-                    // Transport parameters arrived: open the control stream
-                    // first, then flush queued queries.
-                    send_preamble(quic);
-                    *h3_ready = true;
-                    flush_queue(
-                        cfg, dns_sock, quic_sock, quic, h3, pending, queue, req_buf, rt, now,
-                    );
+                    // Transport parameters arrived: open the control stream,
+                    // which is the precondition for opening request streams.
+                    // The listen socket joins the reuseport group on this same
+                    // pass, once `sync_listen` sees `h3_ready`; until then the
+                    // kernel routes queries to workers that can serve them.
+                    *h3_ready = send_preamble(quic);
                 }
             }
             proto::Event::ConnectionLost { reason } => {
@@ -783,19 +820,36 @@ fn process_quic_events(
                 }
             }
             H3Event::Goaway => {
-                // Skip stale GOAWAYs arriving after the connection was
-                // already torn down (events are drained in one batch).
-                if quic.has_conn() {
+                // Stale GOAWAYs arrive after the connection was already torn
+                // down (events are drained in one batch); a second one while
+                // already draining is likewise a no-op.
+                if !quic.has_conn() || *goaway {
+                    log::trace!("h3: ignoring stale GOAWAY");
+                } else {
                     log::info!("h3: GOAWAY received, draining");
                     *goaway = true;
-                    if pending.is_empty() {
-                        *reconnect_at = Some(now);
-                    }
-                } else {
-                    log::trace!("h3: ignoring stale GOAWAY (connection gone)");
+                    // Requests already in flight may still complete, so give
+                    // them time to — but only briefly. While this worker drains
+                    // it can only SERVFAIL whatever else the kernel routes to
+                    // it, and `SO_REUSEPORT` feeds the retries of those
+                    // SERVFAILs back to this same socket. A drain is worth about
+                    // one slow round trip, not the whole request timeout; see
+                    // `GOAWAY_DRAIN_MAX`.
+                    *reconnect_at = Some(if pending.is_empty() {
+                        now
+                    } else {
+                        now + GOAWAY_DRAIN_MAX
+                    });
                 }
             }
         }
+    }
+
+    // A draining connection whose in-flight requests have all been answered can
+    // go now: setting `reconnect_at` to the present re-arms the timer on the
+    // next pass. Housekeeping applies the same rule on its own ticks.
+    if *goaway && pending.is_empty() {
+        *reconnect_at = Some(now);
     }
 }
 
@@ -804,14 +858,13 @@ fn process_quic_events(
 #[allow(clippy::too_many_arguments)]
 fn housekeeping(
     cfg: &WorkerConfig,
-    dns_sock: &UdpSocket,
+    dns_sock: &ListenSocket,
     quic_sock: &UdpSocket,
     shm: &mut shared::ResolveReader,
     scores: &shared::ScoreWriter,
     quic: &mut Quic,
     h3: &mut H3,
     pending: &mut HashMap<u64, Pending>,
-    queue: &mut std::collections::VecDeque<QueuedQuery>,
     rt: &mut Runtime,
     goaway: &mut bool,
     h3_ready: &mut bool,
@@ -844,17 +897,6 @@ fn housekeeping(
             }
             rt.slot = set.slot_for(cfg.child_idx).unwrap_or(rt.slot);
             rt.set = set;
-        }
-    }
-
-    // ── Expire stale queued (never-sent) queries ──
-    while let Some(q) = queue.front() {
-        if q.deadline <= now {
-            let q = queue.pop_front().unwrap();
-            rt.quality.on_failure();
-            send_servfail(dns_sock, &q.query, q.peer);
-        } else {
-            break;
         }
     }
 
@@ -915,6 +957,14 @@ fn housekeeping(
             // it before reconnecting — otherwise the reconnect branch below
             // would no-op and the timer would spin on a past deadline.
             if quic.has_conn() {
+                if *goaway && !pending.is_empty() {
+                    // The drain window is up with requests still in flight.
+                    // They can no longer be answered — the socket leaves with
+                    // the connection — and leaving them pending would keep this
+                    // worker in the reuseport group, SERVFAILing everything else
+                    // the kernel routes to it.
+                    fail_all_pending(dns_sock, pending, rt);
+                }
                 quic.close(now, quic_sock);
                 quic.drop_conn();
                 *h3 = H3::new();
@@ -1008,7 +1058,62 @@ fn migration_target(rt: &mut Runtime, cfg: &WorkerConfig, now: Instant) -> Optio
     }
 }
 
-fn send_servfail(sock: &UdpSocket, query: &[u8], peer: SocketAddr) {
+/// Whether this worker belongs in the `SO_REUSEPORT` group: it must be able to
+/// open a request stream, which needs a live connection *and* usable transport
+/// parameters (`h3_ready`: restored by 0-RTT, or learned from the completed
+/// handshake). In every other state a query could only be SERVFAILed.
+fn accepting(has_conn: bool, h3_ready: bool) -> bool {
+    has_conn && h3_ready
+}
+
+/// Move the listen socket in or out of the reuseport group as serving ability
+/// changes.
+///
+/// Out of the group, the kernel rehashes the flows that hashed to this worker
+/// onto its peers, so a resolver retrying a query this worker just failed is
+/// served instead of being fed back here. Rejoining is retried on every pass;
+/// a bind failure leaves the worker out of the group (it cannot serve anyway)
+/// without killing its connection.
+fn sync_listen(
+    cfg: &WorkerConfig,
+    poller: &Poller,
+    listen: &mut ListenSocket,
+    pending: &mut HashMap<u64, Pending>,
+    rt: &mut Runtime,
+    want: bool,
+) {
+    if want {
+        if let Err(e) = listen.join(cfg.listen, cfg.busy_poll, poller) {
+            log::warn!("cannot (re)join the reuseport group: {e}");
+        }
+        return;
+    }
+    if !listen.is_bound() {
+        return;
+    }
+    // Leaving the group is only safe once nothing in flight still needs this
+    // socket to be answered on: dispatched requests, then whatever the kernel
+    // queued before it stops routing here.
+    fail_all_pending(listen, pending, rt);
+    fail_buffered_queries(listen);
+    listen.leave();
+}
+
+/// SERVFAIL every query still sitting in the listen socket's receive buffer.
+///
+/// Closing the socket discards them, and a dropped query costs the resolver its
+/// whole retry timeout — the fast-fail is the reason to answer here at all.
+fn fail_buffered_queries(listen: &ListenSocket) {
+    let mut buf = [0u8; MAX_DNS_LEN];
+    while let Ok((n, peer)) = listen.recv_from(&mut buf) {
+        let query = &buf[..n];
+        if dns::validate_query(query).is_ok() {
+            send_servfail(listen, query, peer);
+        }
+    }
+}
+
+fn send_servfail(sock: &ListenSocket, query: &[u8], peer: SocketAddr) {
     let mut out = Vec::with_capacity(query.len());
     if dns::build_servfail(query, &mut out) {
         let _ = sock.send_to(&out, peer);
@@ -1016,7 +1121,7 @@ fn send_servfail(sock: &UdpSocket, query: &[u8], peer: SocketAddr) {
 }
 
 /// Fail every in-flight request and count them against the current address.
-fn fail_all_pending(sock: &UdpSocket, pending: &mut HashMap<u64, Pending>, rt: &mut Runtime) {
+fn fail_all_pending(sock: &ListenSocket, pending: &mut HashMap<u64, Pending>, rt: &mut Runtime) {
     for (_, p) in pending.drain() {
         rt.quality.on_failure();
         send_servfail(sock, &p.query, p.peer);
@@ -1026,6 +1131,67 @@ fn fail_all_pending(sock: &UdpSocket, pending: &mut HashMap<u64, Pending>, rt: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How long a test waits for one loopback datagram before giving up.
+    const RECV_BUDGET: Duration = Duration::from_millis(500);
+
+    /// A minimal valid query (header + one question), as a resolver sends it.
+    fn sample_query() -> Vec<u8> {
+        vec![
+            0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, b'a',
+            0x00, 0x00, 0x01, 0x00, 0x01,
+        ]
+    }
+
+    /// Bind a listen socket on an ephemeral port, then report its address.
+    fn bound_socket(addr: &str) -> (ListenSocket, SocketAddr) {
+        let sock = bind_dns_socket(addr.parse().unwrap(), false).unwrap();
+        let local = sock.local_addr().unwrap();
+        (ListenSocket { sock: Some(sock) }, local)
+    }
+
+    /// Receive one datagram within `budget`, or report that none arrived.
+    fn recv_within(listen: &ListenSocket, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        let mut buf = [0u8; MAX_DNS_LEN];
+        loop {
+            if listen.recv_from(&mut buf).is_ok() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// A worker config for the group-membership tests; only `listen` matters.
+    fn test_config(listen: SocketAddr) -> WorkerConfig {
+        WorkerConfig {
+            listen,
+            upstream: HttpsUrl::parse("https://doh.example/dns-query").unwrap(),
+            token: None,
+            timeout: Duration::from_secs(30),
+            pad: false,
+            busy_poll: false,
+            spin: false,
+            mlockall: false,
+            shm_fd: -1,
+            score_fd: -1,
+            child_idx: 0,
+        }
+    }
+
+    fn test_runtime(cfg: &WorkerConfig, now: Instant) -> Runtime {
+        let set = UpstreamSet {
+            addrs: vec!["192.0.2.1".parse().unwrap()],
+            weights: vec![1],
+            revision: 1,
+            workers: 1,
+            published_mono_secs: 0,
+        };
+        Runtime::new(set, cfg, now)
+    }
 
     #[test]
     fn migration_slots_rotate_one_worker_at_a_time() {
@@ -1047,5 +1213,167 @@ mod tests {
         // Degenerate worker counts do not divide by zero or wedge anyone.
         assert!(migration_slot_open(7, 0, 0));
         assert!(migration_slot_open(7, 1, 0));
+    }
+
+    #[test]
+    fn a_worker_only_accepts_queries_when_it_can_open_streams() {
+        // Reconnecting (no connection at all: the backoff window) → out of the
+        // reuseport group, so retries go to a peer that can serve.
+        assert!(!accepting(false, false));
+        assert!(!accepting(false, true));
+        // Connected but still handshaking (no 0-RTT): request streams cannot be
+        // opened yet, so a query could only be SERVFAILed.
+        assert!(!accepting(true, false));
+        // Handshake completed, or 0-RTT restored the transport parameters: serve.
+        assert!(accepting(true, true));
+    }
+
+    /// The regression this guards: `SO_REUSEPORT` picks a socket by hashing the
+    /// client's flow, and a resolver retrying a failed query reuses that flow —
+    /// so a worker that keeps its socket while it is reconnecting is handed the
+    /// retry again, answers SERVFAIL again, and the resolver never reaches a
+    /// healthy worker. Leaving the group must move the flow to a peer.
+    #[test]
+    fn leaving_the_reuseport_group_moves_the_client_flow() {
+        let (first, addr) = bound_socket("127.0.0.1:0");
+        let (second, _) = bound_socket(&addr.to_string());
+
+        // One client socket == one fixed source port == one fixed flow hash.
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client.send_to(b"query", addr).unwrap();
+
+        let (mut hit, other) = if recv_within(&first, RECV_BUDGET) {
+            (first, second)
+        } else if recv_within(&second, RECV_BUDGET) {
+            (second, first)
+        } else {
+            panic!("neither reuseport socket received the query");
+        };
+
+        // While both are bound, the flow stays put — which is exactly why a
+        // worker that cannot serve must leave the group rather than keep
+        // answering.
+        for _ in 0..2 {
+            client.send_to(b"query", addr).unwrap();
+            assert!(
+                recv_within(&hit, RECV_BUDGET),
+                "the flow moved between two bound sockets"
+            );
+        }
+
+        // The worker goes off duty: the same flow must now reach the peer.
+        hit.leave();
+        client.send_to(b"retry", addr).unwrap();
+        assert!(
+            recv_within(&other, RECV_BUDGET),
+            "the retry went back to the socket that left the reuseport group"
+        );
+    }
+
+    #[test]
+    fn leaving_answers_buffered_queries_before_closing() {
+        let (listen, addr) = bound_socket("127.0.0.1:0");
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client.set_nonblocking(true).unwrap();
+
+        client.send_to(&sample_query(), addr).unwrap();
+        // Loopback delivery is synchronous, but do not depend on that: retry
+        // the drain until the SERVFAIL shows up on the client.
+        let mut buf = [0u8; 512];
+        let mut got = None;
+        for _ in 0..RECV_BUDGET.as_millis() {
+            fail_buffered_queries(&listen);
+            if let Ok((n, _)) = client.recv_from(&mut buf) {
+                got = Some(n);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let n = got.expect("a buffered query was dropped instead of SERVFAILed");
+        assert_eq!(&buf[..2], &[0x12, 0x34], "the query ID must be echoed");
+        assert_eq!(buf[3] & 0x0F, 2, "expected SERVFAIL");
+        assert_eq!(n, sample_query().len());
+    }
+
+    /// `sync_listen` is the fix in one function: out of the group while the
+    /// worker cannot serve, back in once it can — and nothing in flight is lost
+    /// on the way out.
+    #[test]
+    fn sync_listen_enters_and_leaves_the_group_without_dropping_queries() {
+        let cfg = test_config("127.0.0.1:0".parse().unwrap());
+        let poller = Poller::new().unwrap();
+        let mut listen = ListenSocket::unbound();
+        let mut pending = HashMap::new();
+        let now = Instant::now();
+        let mut rt = test_runtime(&cfg, now);
+
+        // Reconnecting: stays out of the group, never touches the port.
+        sync_listen(&cfg, &poller, &mut listen, &mut pending, &mut rt, false);
+        assert!(!listen.is_bound());
+
+        // Can serve: it joins.
+        sync_listen(&cfg, &poller, &mut listen, &mut pending, &mut rt, true);
+        assert!(listen.is_bound());
+        let addr = listen.sock.as_ref().unwrap().local_addr().unwrap();
+
+        // A request in flight when the worker goes off duty is answered with
+        // SERVFAIL, not dropped with the socket…
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client
+            .set_read_timeout(Some(RECV_BUDGET))
+            .expect("read timeout");
+        pending.insert(
+            1,
+            Pending {
+                query: sample_query(),
+                peer: client.local_addr().unwrap(),
+                deadline: now + Duration::from_secs(30),
+                started: now,
+            },
+        );
+        sync_listen(&cfg, &poller, &mut listen, &mut pending, &mut rt, false);
+        assert!(
+            !listen.is_bound(),
+            "a worker that cannot serve must leave the reuseport group"
+        );
+        assert!(pending.is_empty());
+        let mut buf = [0u8; 512];
+        let (n, _) = client
+            .recv_from(&mut buf)
+            .expect("the in-flight request was dropped instead of SERVFAILed");
+        assert_eq!(&buf[..2], &sample_query()[..2], "the ID must be echoed");
+        assert_eq!(buf[3] & 0x0F, 2, "expected SERVFAIL");
+        assert_eq!(n, sample_query().len());
+
+        // …and it rejoins the configured port once it can serve again.
+        let cfg = test_config(addr);
+        sync_listen(&cfg, &poller, &mut listen, &mut pending, &mut rt, true);
+        assert_eq!(
+            listen.sock.as_ref().unwrap().local_addr().unwrap(),
+            addr,
+            "the reconnecting worker must come back on its configured port"
+        );
+    }
+
+    #[test]
+    fn rejoining_the_group_serves_the_port_again() {
+        let poller = Poller::new().unwrap();
+        let mut listen = ListenSocket::unbound();
+        assert!(!listen.is_bound());
+
+        listen
+            .join("127.0.0.1:0".parse().unwrap(), false, &poller)
+            .unwrap();
+        let addr = listen.sock.as_ref().unwrap().local_addr().unwrap();
+        assert!(listen.is_bound());
+
+        listen.leave();
+        assert!(!listen.is_bound());
+
+        // A reconnecting worker rejoins the same port once it can serve.
+        listen.join(addr, false, &poller).unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client.send_to(b"query", addr).unwrap();
+        assert!(recv_within(&listen, RECV_BUDGET));
     }
 }

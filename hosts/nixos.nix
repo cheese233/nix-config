@@ -293,9 +293,9 @@
   # path); every 2s it publishes the request-level RTT it measured as a score
   # (1/RTT), and the supervisor turns those into per-address weights. The weighted slot
   # assignment then splits the *fleet* across addresses in proportion — with 6
-  # workers, weights 3:2:1 really do place 3/2/1 workers — because unbound
-  # sends every query from a random source port, so SO_REUSEPORT spreads
-  # queries evenly over the workers. Nothing in the request path changes.
+  # workers, weights 3:2:1 really do place 3/2/1 workers — because unbound picks
+  # a fresh source port per query, so SO_REUSEPORT spreads new queries evenly
+  # over the workers. Nothing in the request path changes.
   #
   # A worker only migrates when its newly assigned address measures materially
   # better (150% weight), at most once every 3 minutes, staggered by worker
@@ -303,6 +303,14 @@
   # cannot disturb a healthy connection. Measured on this line, individual edge
   # addresses differ by more than 10x at the same instant (0.42s vs 5s
   # timeouts), so the selection has real work to do even with two candidates.
+  #
+  # A worker that cannot serve (reconnecting, still handshaking, or draining a
+  # GOAWAY) closes its DNS socket, which takes it out of the kernel's reuseport
+  # group. That matters because SO_REUSEPORT hashes the client's flow (source
+  # address *and* port) and unbound reuses that flow when it retries: a worker
+  # that stayed in the group would be fed the retries of the SERVFAILs it just
+  # sent, for as long as its reconnect lasts. Out of the group, the kernel
+  # rehashes those flows onto workers that can actually answer.
   #
   # The candidate set is exactly what $DOMAIN resolves to (via unbound, hence
   # under DNS control) — widen the pool by serving more addresses for the name;
