@@ -9,7 +9,7 @@
     ../modules/containers-peerbanhelper.nix
     ../modules/containers-autobangumi.nix
     ../modules/containers-suwayomi.nix
-    ../modules/lxc-debian.nix
+    ../modules/lxc-ubuntu.nix
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
     inputs.honk.nixosModules.default
