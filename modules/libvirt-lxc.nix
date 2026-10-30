@@ -235,13 +235,23 @@ in
     ];
 
     # libvirtd only reads its config directory at startup, so the definitions
-    # must exist before it starts.  When a definition changes the unit re-runs
-    # and bounces libvirtd so the new XML is loaded; running domains survive a
-    # libvirtd restart (libvirt reconnects to them).
+    # must exist before it starts -- hence `before`.  Nothing here may talk to
+    # libvirtd (no `systemctl restart libvirtd`, no `virsh`): since this unit is
+    # ordered before it, such a call waits for a job that is itself waiting for
+    # this unit, which deadlocks the whole daemon.  Applying a *changed*
+    # definition is therefore a manual step:
     #
-    # There is no reconciliation for removals: dropping a container from the
-    # attrset leaves its XML behind, and autostart will keep starting it until
-    # the file is removed (or `virsh -c lxc:/// undefine <name>`).
+    #   systemctl restart libvirtd                      # reload the definition
+    #   virsh -c lxc:/// destroy ubuntu                 # recreate the domain,
+    #   virsh -c lxc:/// start ubuntu                   # so cgroups are re-applied
+    #
+    # The second half is not optional for limits: a libvirtd restart alone only
+    # replaces the persistent definition, it does not re-run cgroup setup for a
+    # domain that is already running.
+    #
+    # There is no reconciliation for removals either: dropping a container from
+    # the attrset leaves its XML behind, and autostart will keep starting it
+    # until the file is removed (or `virsh -c lxc:/// undefine <name>`).
     systemd.services = lib.mapAttrs' (
       name: c:
       lib.nameValuePair "libvirt-lxc-${name}" {
@@ -249,7 +259,7 @@ in
         before = [ "libvirtd.service" ];
         wantedBy = [ "multi-user.target" ];
         restartTriggers = [ c.xml ];
-        path = [ config.systemd.package pkgs.coreutils ];
+        path = [ pkgs.coreutils ];
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
@@ -263,9 +273,6 @@ in
         ''
         + lib.optionalString (!c.autostart) ''
           rm -f /var/lib/libvirt/lxc/autostart/${name}.xml
-        ''
-        + ''
-          systemctl try-restart libvirtd.service
         '';
       }
     ) cfg.containers;
