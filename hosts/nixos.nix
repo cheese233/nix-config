@@ -9,7 +9,7 @@
     ../modules/containers-peerbanhelper.nix
     ../modules/containers-autobangumi.nix
     ../modules/containers-suwayomi.nix
-    ../modules/lxc-ubuntu.nix
+    ../modules/libvirt-lxc.nix
     inputs.microvm.nixosModules.host
     inputs.nnf.nixosModules.default
     inputs.honk.nixosModules.default
@@ -33,6 +33,18 @@
 
   virtualisation.podman.enable = true;
   virtualisation.oci-containers.backend = "podman";
+
+  # ==================== Ubuntu LXC (libvirt) ====================
+  # The domain XML is generated from these attributes (see modules/libvirt-lxc.nix);
+  # the rootfs itself has to be provisioned separately, e.g.
+  #   debootstrap --variant=minbase resolute /var/lib/lxc/ubuntu/rootfs
+  virtualisation.libvirtLxc.containers.ubuntu = {
+    vcpus  = 2;
+    memory = 5120;
+    swap   = 4096;
+    rootfs = "/var/lib/lxc/ubuntu/rootfs";
+    mac    = "02:00:00:00:00:08";
+  };
 
   # https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion
   # Do NOT change this after initial install unless you know what you're doing.
