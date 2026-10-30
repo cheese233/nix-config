@@ -7,7 +7,7 @@
 # as `virtualisation.incus`), which gives us cgroup-backed CPU/memory limits and
 # a hard rootfs quota without any hand-written cgroup plumbing.
 #
-#   incus list                                    # state + limits
+#   incus list                                    # state, limits, address
 #   incus exec ubuntu -- bash                     # shell
 #   incus exec ubuntu -- cloud-init status --long # what cloud-init did
 #   incus config show ubuntu                      # effective config
@@ -46,21 +46,32 @@ let
   # the firewall's `lan` zone and honk's tproxy scope.  br-lan carries no IPv4,
   # so the instance gets none either: IPv4-only destinations are reached
   # through DNS64 + NAT64 (unbound synthesises 64:ff9b::/96, tayga translates).
+  #
+  # The address is whatever radvd hands out over RA, as with every other
+  # container here.  The MAC is pinned instead of the address (02: = locally
+  # administered, matching the 02:00:00:00:00:0{3..7} used by the podman
+  # containers), which keeps the SLAAC address stable across restarts and gives
+  # the firewall something durable to match on now that the address is not
+  # known at evaluation time.
   iface = "eth0";
-  ipv6 = "fdea:d:beef::50";
+  mac = "02:00:00:00:00:08";
   dns = "fdea:d:beef::1";
 
-  # cloud-init -> netplan -> systemd-networkd.  The ULA address is static rather
-  # than SLAAC-only because unbound's access-control only admits sources inside
-  # fdea:d:beef::/48; global IPv6 and the default route still arrive by RA on
-  # top of it.  DNS goes through systemd-resolved, which the image already
-  # points /etc/resolv.conf at, so no resolv.conf surgery is needed.
+  # cloud-init -> netplan -> systemd-networkd: nothing but "accept RAs, no
+  # DHCP", plus the resolver.  `accept-ra` is on by default, but it is written
+  # out because it is the only thing that brings the interface up at all.  DNS
+  # goes through systemd-resolved, which the image already points
+  # /etc/resolv.conf at, so no resolv.conf surgery is needed.
+  #
+  # Caveat: unbound's access-control only admits sources inside
+  # fdea:d:beef::/48, so this depends on radvd advertising the ULA /64 -- that
+  # is the address the container sources its queries from.  If it only ever gets
+  # a delegated-prefix address, DNS comes back REFUSED.
   networkConfig = ''
     network:
       version: 2
       ethernets:
         ${iface}:
-          addresses: [ ${ipv6}/64 ]
           dhcp4: false
           dhcp6: false
           accept-ra: true
@@ -148,7 +159,8 @@ in
 
       if ! incus info "${name}" >/dev/null 2>&1; then
         echo "creating ${name} from ${image}"
-        incus launch "${image}" "${name}" --profile default --profile "${profile}" --storage "${pool}"
+        incus launch "${image}" "${name}" --profile default --profile "${profile}" --storage "${pool}" \
+          --device "${iface},hwaddr=${mac}"
 
         # Informational: cloud-init renders and applies the netplan document
         # during this same boot, so the rebuild log says whether the address
@@ -162,13 +174,16 @@ in
   # ---------------------------------------------------------------- firewall
   # NNF drops traffic *within* a zone by default (only mDNS is allowed between
   # LAN hosts), so a container bridged onto br-lan is unreachable in both
-  # directions until it is named here.
+  # directions until it is named here.  The match is on the pinned MAC rather
+  # than on an address, because the address now comes from RA and is not known
+  # here; `ether` is available because br_netfilter hands the bridged frames to
+  # the inet forward hook with their L2 header intact.
   networking.nftables.firewall.rules.lan-to-lan-ubuntu = {
     from = [ "lan" ];
     to = [ "lan" ];
     extraLines = [
-      "ip6 daddr ${ipv6} accept comment \"ubuntu lxc\""
-      "ip6 saddr ${ipv6} accept comment \"ubuntu lxc\""
+      "ether daddr ${mac} accept comment \"ubuntu lxc\""
+      "ether saddr ${mac} accept comment \"ubuntu lxc\""
     ];
   };
 }
