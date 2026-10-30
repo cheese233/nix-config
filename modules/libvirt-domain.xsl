@@ -17,6 +17,12 @@
       <memory unit="KiB"><xsl:value-of select="number($d/attr[@name='memory']/*/@value) * 1024"/></memory>
       <currentMemory unit="KiB"><xsl:value-of select="number($d/attr[@name='memory']/*/@value) * 1024"/></currentMemory>
       <vcpu placement="static"><xsl:value-of select="$d/attr[@name='vcpus']/*/@value"/></vcpu>
+      <xsl:if test="$d/attr[@name='cpuQuota']">
+        <cputune>
+          <quota><xsl:value-of select="$d/attr[@name='cpuQuota']/*/@value"/></quota>
+          <period><xsl:value-of select="$d/attr[@name='cpuPeriod']/*/@value"/></period>
+        </cputune>
+      </xsl:if>
       <xsl:if test="$d/attr[@name='swap']">
         <memtune>
           <swap_hard_limit unit="KiB"><xsl:value-of select="number($d/attr[@name='swap']/*/@value) * 1024"/></swap_hard_limit>

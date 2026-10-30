@@ -32,7 +32,36 @@ let
       vcpus = lib.mkOption {
         type = lib.types.ints.positive;
         default = 1;
-        description = "Visible CPUs, emitted as <vcpu placement='static'> (cpuset pinning).";
+        description = ''
+          vCPUs advertised to the domain (`<vcpu placement='static'>`).
+          Note this is *not* a limit for the LXC driver: libvirt only feeds
+          `def->cpumask` into cpuset, and the cpumask comes from a `<vcpu
+          cpuset='...'>` attribute, which this module does not emit.  Use
+          `cpuQuota` to actually cap CPU time.
+        '';
+      };
+
+      cpuQuota = lib.mkOption {
+        type = lib.types.nullOr lib.types.ints.positive;
+        default = 200000;
+        example = 100000;
+        description = ''
+          CPU bandwidth cap in microseconds per `cpuPeriod`, emitted as
+          `<cputune><quota>`.  quota / period = number of full CPUs worth of CPU
+          time, so the default 200000/100000 means "2 CPUs" -- the same thing as
+          podman's `--cpus=2`, landing in cgroup v2 as `cpu.max = 200000 100000`.
+
+          This is a rate limit, not a pin: the container still sees every host
+          CPU, a single-threaded task still runs at full speed, and only when it
+          wants more than 2 CPUs' worth does it get throttled (visible in
+          `cpu.stat` as nr_throttled).  Set to null to remove the cap.
+        '';
+      };
+
+      cpuPeriod = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 100000;
+        description = "Accounting window for `cpuQuota`, in microseconds.";
       };
 
       memory = lib.mkOption {
@@ -47,10 +76,8 @@ let
         example = 4096;
         description = ''
           Extra swap allowance in MiB, emitted as <memtune><swap_hard_limit>.
-          On a cgroup v2 host this is the part that needs verifying: there is no
-          memsw controller, so whether libvirt maps it to `memory.swap.max` --
-          and with which semantics -- has to be checked afterwards in
-          /sys/fs/cgroup/system.slice/machine-<name>.scope/.
+          Verified on this host to reach the kernel: libvirt writes it to
+          memory.swap.max in the domain's `libvirt` child cgroup on cgroup v2.
         '';
       };
 
@@ -124,7 +151,9 @@ let
     config.tree = {
       inherit (config) vcpus memory init rootfs bridge mac ifname extraXML;
       inherit name;
-    } // lib.optionalAttrs (config.swap != null) { inherit (config) swap; };
+    }
+    // lib.optionalAttrs (config.swap != null) { inherit (config) swap; }
+    // lib.optionalAttrs (config.cpuQuota != null) { inherit (config) cpuQuota cpuPeriod; };
 
     config.xml = pkgs.runCommand "libvirt-lxc-${name}.xml" {
       nativeBuildInputs = [ pkgs.libxslt ];
@@ -143,6 +172,67 @@ in
 
   config = lib.mkIf (cfg.containers != { }) {
     virtualisation.libvirtd.enable = true;
+
+    # `virsh lxc-enter-namespace` cannot work on this host: it writes its own
+    # process into the domain scope's cgroup.procs, which returns EBUSY on
+    # cgroup v2 because the scope already delegates the controllers to its
+    # `libvirt` child ("no internal process" rule).  This does the same job with
+    # nsenter.
+    #
+    # Getting the pid right is the subtle part: for LXC domains `virsh domid`
+    # returns the pid of libvirt_lxc, which lives in the *host* namespaces (it is
+    # a child of pid 1).  The container's init is libvirt_lxc's child and is the
+    # process that owns the container's mount/uts/ipc/net/pid namespaces.
+    environment.systemPackages = [
+      (pkgs.writeShellScriptBin "lxc-enter" ''
+        set -eu
+        export PATH=${lib.makeBinPath [ pkgs.coreutils pkgs.gnugrep pkgs.procps ]}:$PATH
+
+        uri=lxc:///
+        virsh=${config.virtualisation.libvirtd.package}/bin/virsh
+        nsenter=${pkgs.util-linux}/bin/nsenter
+
+        # First argument is the domain if it names one; everything else is the
+        # command to run.  With no domain, use the single running LXC domain.
+        if [ "$#" -gt 0 ] && "$virsh" -c "$uri" list --name | grep -qxF -- "$1"; then
+          domain=$1
+          shift
+        else
+          domain=$("$virsh" -c "$uri" list --name --state-running | head -n 1)
+        fi
+
+        if [ -z "''${domain:-}" ]; then
+          echo "lxc-enter: no running LXC domain; pass one explicitly" >&2
+          exit 2
+        fi
+
+        ctl=$("$virsh" -c "$uri" domid "$domain")
+        init=
+        for p in $(pgrep -P "$ctl" || true); do
+          case "$(cat /proc/"$p"/comm 2>/dev/null)" in
+            systemd|init) init=$p; break ;;
+          esac
+          init=''${init:-$p}
+        done
+
+        if [ -z "''${init:-}" ]; then
+          echo "lxc-enter: no init process under $domain (pid $ctl)" >&2
+          exit 1
+        fi
+
+        [ "$#" -gt 0 ] || set -- /bin/bash
+
+        # The child inherits PATH, and the host's NixOS PATH is useless inside
+        # the container, so hand it a normal FHS PATH.  --preserve-credentials
+        # keeps us as root; an idmapped (unprivileged) domain would need -U.
+        (
+          PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          export PATH
+          exec "$nsenter" --target "$init" --mount --uts --ipc --net --pid \
+            --preserve-credentials -- "$@"
+        )
+      '')
+    ];
 
     # libvirtd only reads its config directory at startup, so the definitions
     # must exist before it starts.  When a definition changes the unit re-runs
