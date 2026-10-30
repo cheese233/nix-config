@@ -125,8 +125,9 @@
     "br-lan".interfaces = [ "enp2s0f1" "enp3s0" ];
   };
 
+  # br-lan is IPv6-only: LAN clients address each other over the ULA /64 and
+  # reach IPv4-only destinations through DNS64 + NAT64 (see tayga below).
   networking.interfaces."br-lan" = {
-    ipv4.addresses = [ { address = "192.168.110.1"; prefixLength = 24; } ];
     ipv6.addresses = [ { address = "fdea:d:beef::1"; prefixLength = 64; } ];
   };
 

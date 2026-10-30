@@ -34,19 +34,17 @@ let
   poolSize = "32GiB"; # -> /var/lib/incus/disks/default.img
 
   # ------------------------------------------------------------------ network
-  # The instance is bridged onto br-lan like every other container on this
-  # host, so it lands in the firewall's `lan` zone and honk's tproxy scope.
-  # br-lan has no DHCPv4 server (only radvd + stateless DHCPv6), hence the
-  # static address below.
+  # Bridged onto br-lan like every other container on this host, so it lands in
+  # the firewall's `lan` zone and honk's tproxy scope.  br-lan carries no IPv4
+  # and has no DHCPv4 server, so the container gets no IPv4 at all: IPv4-only
+  # destinations are reached through DNS64 + NAT64 (unbound synthesises
+  # 64:ff9b::/96 answers, tayga translates them).
   iface = "eth0";
-  ipv4 = "192.168.110.50";
-  ipv4Prefix = 24;
-  gateway = "192.168.110.1";
 
-  # A static ULA address keeps the container's *source* inside unbound's
-  # access-control range (fdea:d:beef::/48) no matter which prefixes radvd
-  # happens to advertise, and makes LAN -> container rules expressible.
-  # Global IPv6 still arrives by SLAAC on top of this.
+  # Static rather than left to SLAAC because unbound's access-control only
+  # admits sources inside fdea:d:beef::/48 — a SLAAC address could come from the
+  # delegated prefix instead and have its DNS REFUSED.  Global IPv6 and the
+  # default route still arrive by SLAAC/RA on top of this.
   ipv6 = "fdea:d:beef::50";
 
   # The host's unbound, which also does DNS64 for the NAT64 path.
@@ -58,15 +56,14 @@ let
   # container, so this must not be a writeShellScript.
   #
   # The `default` image variant ships systemd-networkd with a DHCP config for
-  # eth0, and there is no DHCPv4 server on br-lan, so that file is replaced.
+  # eth0, and nothing hands out addresses on br-lan, so that file is replaced
+  # with an IPv6-only static one.
   netSetup = pkgs.writeText "debian-net-setup" ''
     #!/bin/sh
     # Idempotent network configuration for the Debian container.
     set -eu
 
     iface=${iface}
-    ipv4=${ipv4}/${toString ipv4Prefix}
-    ipv4_gw=${gateway}
     ipv6=${ipv6}/64
     dns=${dns}
 
@@ -75,9 +72,7 @@ let
       echo "Name=$iface"
       echo
       echo '[Network]'
-      echo "Address=$ipv4"
       echo "Address=$ipv6"
-      echo "Gateway=$ipv4_gw"
       echo "DNS=$dns"
     }
 
@@ -86,9 +81,6 @@ let
       echo 'iface lo inet loopback'
       echo
       echo "auto $iface"
-      echo "iface $iface inet static"
-      echo "    address $ipv4"
-      echo "    gateway $ipv4_gw"
       echo "iface $iface inet6 static"
       echo "    address $ipv6"
     }
@@ -115,9 +107,7 @@ let
       ifup -a 2>/dev/null || true
     else
       ip link set "$iface" up
-      ip addr replace "$ipv4" dev "$iface"
-      ip addr replace "$ipv6" dev "$iface"
-      ip route replace default via "$ipv4_gw" dev "$iface"
+      ip -6 addr replace "$ipv6" dev "$iface"
     fi
 
     # 3. DNS.  The image's /etc/resolv.conf is a symlink into systemd-resolved,
@@ -237,8 +227,6 @@ in
     from = [ "lan" ];
     to = [ "lan" ];
     extraLines = [
-      "ip daddr ${ipv4} accept comment \"debian lxc\""
-      "ip saddr ${ipv4} accept comment \"debian lxc\""
       "ip6 daddr ${ipv6} accept comment \"debian lxc\""
       "ip6 saddr ${ipv6} accept comment \"debian lxc\""
     ];
