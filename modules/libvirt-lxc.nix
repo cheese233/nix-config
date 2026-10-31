@@ -8,6 +8,7 @@
 #     swap   = 4096;                            # MiB on top of memory (see below)
 #     rootfs = "/var/lib/lxc/ubuntu/rootfs";    # a directory with a real userland
 #     mac    = "02:00:00:00:00:08";
+#     idmap  = { target = 100000; };            # unprivileged (own user namespace)
 #   };
 #
 # The Nix side produces a plain data tree (`tree`), `builtins.toXML` serialises
@@ -21,9 +22,10 @@
 # Note it is not /etc/libvirt/lxc: nixpkgs builds libvirt with
 # --sysconfdir=/var/lib.
 #
-# Deliberately not imported by hosts/nixos.nix at the time of writing: the
-# incus variant lives in modules/lxc-ubuntu.nix and both would claim the same
-# MAC on br-lan.  Enable one or the other.
+# hosts/nixos.nix imports this module, so the libvirt variant is the live one:
+# modules/lxc-ubuntu.nix is the alternative Incus variant and is deliberately
+# left unimported, because both would claim the same MAC on br-lan.  Enable one
+# or the other.
 let
   cfg = config.virtualisation.libvirtLxc;
 
@@ -130,6 +132,50 @@ let
         '';
       };
 
+      idmap = lib.mkOption {
+        type = lib.types.nullOr (lib.types.submodule {
+          options = {
+            target = lib.mkOption {
+              type = lib.types.ints.unsigned;
+              example = 100000;
+              description = ''
+                First host uid/gid that the container's id 0 maps to.  It must
+                not overlap ids the host uses itself (0, and the login range),
+                so the conventional start is 100000.
+              '';
+            };
+
+            count = lib.mkOption {
+              type = lib.types.ints.positive;
+              default = 65536;
+              description = "How many ids, starting at 0 inside and at `target` outside, are mapped.";
+            };
+          };
+        });
+        default = null;
+        description = ''
+          Setting this makes the domain unprivileged: libvirt gives it its own
+          user namespace and emits `<idmap>`, so the container's root is an
+          ordinary unprivileged uid on the host instead of the host's uid 0.
+
+          The libvirt schema fixes `start` at 0 for both the uid and the gid
+          mapping (libvirt's formatdomain reference: "start -- First user ID in
+          container. It must be '0'."), so this module emits 0 -> `target` for
+          both out of this one value.  A deployment that needs the uid and gid
+          ranges to diverge has to widen the stylesheet, which owns the schema.
+
+          Nothing remaps the rootfs for you: every file in it must already be
+          owned by the mapped range on the host, or the container boots with its
+          own files owned by the overflow id and cannot run init.  Before the
+          first start of an unprivileged domain:
+
+            chown -R 100000:100000 /var/lib/lxc/ubuntu/rootfs
+
+          Reverting to a privileged domain means chowning that tree back to root
+          as well, so the two are not swapped by editing this attribute alone.
+        '';
+      };
+
       tree = lib.mkOption {
         type = lib.types.attrs;
         readOnly = true;
@@ -153,7 +199,13 @@ let
       inherit name;
     }
     // lib.optionalAttrs (config.swap != null) { inherit (config) swap; }
-    // lib.optionalAttrs (config.cpuQuota != null) { inherit (config) cpuQuota cpuPeriod; };
+    // lib.optionalAttrs (config.cpuQuota != null) { inherit (config) cpuQuota cpuPeriod; }
+    // lib.optionalAttrs (config.idmap != null) {
+      # Restate the two fields instead of `inherit (config) idmap`: a submodule
+      # value also carries `_module`, which holds functions, and `toXML` cannot
+      # serialise that into the tree the stylesheet reads.
+      idmap = { inherit (config.idmap) target count; };
+    };
 
     config.xml = pkgs.runCommand "libvirt-lxc-${name}.xml" {
       nativeBuildInputs = [ pkgs.libxslt ];
@@ -223,13 +275,19 @@ in
         [ "$#" -gt 0 ] || set -- /bin/bash
 
         # The child inherits PATH, and the host's NixOS PATH is useless inside
-        # the container, so hand it a normal FHS PATH.  --preserve-credentials
-        # keeps us as root; an idmapped (unprivileged) domain would need -U.
+        # the container, so hand it a normal FHS PATH.
+        #
+        # -U enters the domain's user namespace and -S/-G 0 become the
+        # container's root inside it.  An idmapped (unprivileged) domain needs
+        # exactly this, because the host's uid 0 lies outside the mapped range
+        # and --preserve-credentials would land on the overflow id instead.  On
+        # a privileged domain the target's user namespace is the host's, so the
+        # same invocation is a no-op rather than a second code path.
         (
           PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           export PATH
           exec "$nsenter" --target "$init" --mount --uts --ipc --net --pid \
-            --preserve-credentials -- "$@"
+            --user --setuid 0 --setgid 0 -- "$@"
         )
       '')
     ];

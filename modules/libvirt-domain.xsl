@@ -32,6 +32,15 @@
         <type arch="x86_64">exe</type>
         <init><xsl:value-of select="$d/attr[@name='init']/*/@value"/></init>
       </os>
+      <!-- User-namespace mapping: present exactly when the Nix side set `idmap`,
+           which is what makes the domain unprivileged.  libvirt fixes `start`
+           at 0 for both maps and takes target/count from the data tree. -->
+      <xsl:if test="$d/attr[@name='idmap']">
+        <idmap>
+          <uid start="0" target="{$d/attr[@name='idmap']/attrs/attr[@name='target']/*/@value}" count="{$d/attr[@name='idmap']/attrs/attr[@name='count']/*/@value}"/>
+          <gid start="0" target="{$d/attr[@name='idmap']/attrs/attr[@name='target']/*/@value}" count="{$d/attr[@name='idmap']/attrs/attr[@name='count']/*/@value}"/>
+        </idmap>
+      </xsl:if>
       <clock offset="utc"/>
       <on_poweroff>destroy</on_poweroff>
       <on_reboot>restart</on_reboot>

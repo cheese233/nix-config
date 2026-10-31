@@ -44,6 +44,18 @@
     swap   = 4096;
     rootfs = "/var/lib/lxc/ubuntu/rootfs";
     mac    = "02:00:00:00:00:08";
+    # Unprivileged (see the `idmap` option): the domain gets its own user
+    # namespace, so the container's root is uid 100000 on the host instead of
+    # the host's uid 0.  Mapped ids: 0..65535 inside -> 100000..165535 outside.
+    #
+    # The rootfs must be owned by that range *before* the domain starts, and the
+    # definition is only read at libvirtd start:
+    #   chown -R 100000:100000 /var/lib/lxc/ubuntu/rootfs
+    #   systemctl restart libvirtd
+    #   virsh -c lxc:/// destroy ubuntu && virsh -c lxc:/// start ubuntu
+    # Going back to a privileged domain means chowning the rootfs to 0:0 and
+    # removing this attribute.
+    idmap = { target = 100000; count = 65536; };
   };
 
   # https://nixos.org/manual/nixos/stable/options#opt-system.stateVersion
