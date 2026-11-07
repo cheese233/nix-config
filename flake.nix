@@ -50,6 +50,21 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # Cloudflare's published edge ranges, pinned in flake.lock and refreshed
+    # with `nix flake update cloudflareIpsV4 cloudflareIpsV6`. Consumed by
+    # modules/microvm-traefik.nix to build the Traefik IP allowlist, so the
+    # list is baked into the system at build time instead of fetched at runtime.
+    cloudflareIpsV4 = {
+      type = "file";
+      url = "https://www.cloudflare.com/ips-v4";
+      flake = false;
+    };
+    cloudflareIpsV6 = {
+      type = "file";
+      url = "https://www.cloudflare.com/ips-v6";
+      flake = false;
+    };
+
     microvm = {
       url = "github:microvm-nix/microvm.nix";
       inputs.nixpkgs.follows = "nixpkgs";

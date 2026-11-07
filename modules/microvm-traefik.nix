@@ -14,7 +14,32 @@ let
   # host to chown the share before the VM boots.
   traefikUid = 9829;
   traefikGid = 9829;
+
+  # Cloudflare's published edge ranges, pinned as `type = "file"` flake inputs
+  # and fetched at evaluation time. Cloudflare tells userspace ACLs (WAF custom
+  # rules) to use these lists rather than a GeoIP database.
+  #
+  # Refresh with: nix flake update cloudflareIpsV4 cloudflareIpsV6
+  # (a stale lock makes the hash check fail and the rebuild stop, rather than
+  # silently serving an outdated list).
+  #
+  # Only lines that are exactly a CIDR survive, so a changed response format
+  # cannot inject anything into the generated dynamic config.
+  cloudflareRanges =
+    let
+      parse =
+        path:
+        lib.filter (l: builtins.match "^[0-9A-Fa-f:.]+/[0-9]{1,3}$" l != null) (
+          lib.splitString "\n" (builtins.readFile path)
+        );
+    in
+    parse inputs.cloudflareIpsV4 ++ parse inputs.cloudflareIpsV6;
 in
+# A short list would either lock everyone out or (if the middleware were
+# dropped) let everyone in, so refuse to build with an implausible one.
+# Cloudflare currently publishes 22 ranges.
+assert lib.assertMsg (builtins.length cloudflareRanges >= 10)
+  "unexpected Cloudflare IP range count: got ${toString (builtins.length cloudflareRanges)}";
 {
   # QEMU MicroVM running Traefik, directly attached to the existing br-lan bridge.
   microvm.vms.traefik = {
@@ -208,6 +233,9 @@ in
             rule = "Host(`bitwarden.{{ env `STATION` }}`)";
             service = "bitwarden";
             entryPoints = [ "websecure" ];
+            # Only Cloudflare edges may reach the origin. Without this the
+            # origin is reachable directly by anyone who learns the address.
+            middlewares = [ "cloudflare-only" ];
             tls.certResolver = "letsencrypt";
             tls.domains = [
               { main = "*.{{ env `STATION` }}"; sans = [ "{{ env `STATION` }}" ]; }
@@ -231,6 +259,12 @@ in
               ];
             };
           };
+          # Allowlist the Cloudflare edge only. `ipAllowList` with no
+          # `ipStrategy` matches the TCP peer address, so a client-supplied
+          # X-Forwarded-For can never satisfy it (verified against Traefik 3.7).
+          # The ranges come from the pinned flake inputs, so this list is
+          # refreshed by `nix flake update`, not at runtime.
+          http.middlewares.cloudflare-only.ipAllowList.sourceRange = cloudflareRanges;
         };
       };
 
