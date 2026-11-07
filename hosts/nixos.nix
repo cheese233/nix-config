@@ -638,8 +638,16 @@
         # probe would validate the proxy's reachability instead. `dohprobe` is
         # the DoH validator — a copy of curl under that name, see
         # modules/cfst-doh-upstream.nix.
-        pname(cfst) -> direct
-        pname(dohprobe) -> direct
+        #
+        # `(must)` is load-bearing. A plain `direct` decision is punted to
+        # userspace, which resolves the process name asynchronously; a socket
+        # that lives <100ms (every CFST probe) is gone before that lookup, so the
+        # connection fell through to `fallback: proxy` — measured as a local
+        # 0.03ms "handshake", and the ~24k proxied connections exhausted honk's
+        # UDP transport pool. A must rule is terminal in the fast path, so the
+        # name is taken while the socket still exists.
+        pname(cfst) -> direct(must)
+        pname(dohprobe) -> direct(must)
 
         dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
 

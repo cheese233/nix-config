@@ -29,10 +29,12 @@
 #   * CFST and the probe must egress *directly*: honk routes an unlisted process
 #     to the subscription, and then both would measure the proxy path instead of
 #     the one microdoh3 uses. The host config therefore carries
-#     `pname(cfst) -> direct` and `pname(dohprobe) -> direct`; the probe is a
-#     copy of curl under its own name for exactly that reason (honk matches the
-#     process name, which the kernel takes from the executed file's basename,
-#     not the argv[0] a wrapper could change).
+#     `pname(cfst) -> direct(must)` and `pname(dohprobe) -> direct(must)` — the
+#     `(must)` makes the decision terminal in the fast path; a plain `direct` is
+#     punted to userspace, which resolves the process name asynchronously and
+#     misses the sub-100ms sockets a scan is made of. The probe is a copy of curl
+#     under its own name because honk matches the process name, not the argv[0] a
+#     wrapper could change.
 #
 # Failure behaviour: a round that yields nothing, or nothing that passes the DoH
 # probe, leaves the published file untouched, so the DoH keeps working off the
