@@ -23,7 +23,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
   src = fetchurl {
     url = "https://github.com/XIU2/CloudflareSpeedTest/releases/download/v${finalAttrs.version}/cfst_linux_amd64.tar.gz";
-    hash = "sha256-c4c8fc76b4e1bf2bdb5ced8b765956d82dda7bc4eb59df5c04053f0f7db98d90";
+    hash = "sha256-xMj8drThvyvbXO2LdllW2C3ae8TrWd9cBAU/D325jZA=";
   };
 
   dontConfigure = true;

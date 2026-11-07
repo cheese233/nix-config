@@ -318,13 +318,12 @@ in
 
     systemd.services.cfst-doh-upstream = {
       description = "Cloudflare 优选 IP for the DoH upstream (CloudflareSpeedTest → unbound local-data)";
-      # `after` (without `wants`) orders against network-online.target when
-      # something else pulls it in, but never blocks a run on it: ppp0 is
-      # `persist`, and a run that starts before it is up just measures nothing
-      # and leaves the previous selection alone.
+      # Ordered like the resolver it feeds. Not `network-online.target`: a run
+      # that starts before ppp0 is up just measures nothing and leaves the
+      # previous selection alone, so there is nothing to block on.
       wants = [ "unbound.service" ];
       after = [
-        "network-online.target"
+        "network.target"
         "unbound.service"
         "agenix.service"
       ];
