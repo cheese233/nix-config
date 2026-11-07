@@ -421,14 +421,13 @@
   # left off here because the native IPv6 path to the edge measured 30-60% loss
   # on this line, and the 优选 workflow is IPv4-centric.
   #
-  # `enableTimer` stays off: a full run probes Cloudflare's entire published
-  # IPv4 space (~6k addresses / ~24k connects). The current set was picked by
-  # hand from a small ICMP-prefiltered pool; until the module does that
-  # prefilter itself, run it manually (`systemctl start cfst-doh-upstream`) and
-  # not from a timer.
+  # `enableTimer` runs it once a day (04:23 + up to 30min of jitter, no boot
+  # run and no Persistent catch-up): one sweep is ~120 ICMP echoes plus ~16 TCP
+  # handshakes, so a daily tick is cheap. The set currently pinned was picked by
+  # hand from the same pipeline before the timer existed.
   services.cfstDohUpstream = {
     enable = true;
-    enableTimer = false;
+    enableTimer = true;
     # ipv6 = true;
   };
 
