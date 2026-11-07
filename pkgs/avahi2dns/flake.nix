@@ -1,5 +1,5 @@
 {
-  description = "avahi2dns — bridge unicast DNS queries for a TLD to Avahi/mDNS";
+  description = "avahi2dns — bridge unicast DNS queries for a TLD to Avahi/mDNS (in-tree implementation)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
@@ -14,34 +14,21 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         {
-          default = pkgs.buildGoModule rec {
+          default = pkgs.buildGoModule {
             pname = "avahi2dns";
-            version = "0.2.0-dirty";
+            version = "0.3.0";
 
-            src = pkgs.fetchFromGitHub {
-              owner = "LouisBrunner";
-              repo = "avahi2dns";
-              rev = "b7ff69df6e692f44e698462b5aea21777f8f6896";
-              hash = "sha256-k9Yi6c0LJw6w5RgxfNM82HQ/xDBCqyoSdKlnSfjOpxI=";
-            };
+            src = ./src;
 
-            # Avahi's ResolveHostName answers with a single address, picked
-            # from whichever record it saw first. For a host that announces
-            # both a routable and an IPv6 link-local address (fe80::/10), that
-            # is regularly the link-local one, which no unicast DNS client can
-            # connect to. The patch browses the whole record set and answers
-            # with a routable address instead.
-            patches = [
-              ./0001-query-do-not-answer-with-link-local-addresses.patch
-            ];
+            vendorHash = "sha256-dl+n/xPmCmddwY1WgeHlr8j9zW0GlRrAUh5DugeojuY=";
 
-            vendorHash = "sha256-s+NuVtHmN963kNyaIsA5q9a+e1uDvQsH4qNDF63gk0Y=";
-
-            doCheck = false;
+            # The unit tests cover the parts that do not need a bus: answering
+            # with every address, dropping link-local ones, and keeping A and
+            # AAAA independent.
+            doCheck = true;
 
             meta = with pkgs.lib; {
               description = "Bridge unicast DNS queries for a TLD to Avahi via D-Bus";
-              homepage = "https://github.com/LouisBrunner/avahi2dns";
               license = licenses.mit;
               mainProgram = "avahi2dns";
               maintainers = [ ];
