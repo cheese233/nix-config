@@ -108,7 +108,9 @@ let
         -o "$out" ${lib.escapeShellArgs cfg.cfstArgs} \
         >"$WORK/cfst-$fam.log" 2>&1 || true
       [ -s "$out" ] || return 1
-      tail -n +2 "$out" | cut -d, -f1 | tr -d '[:space:]' \
+      # `tr -d ' \r'`, not `tr -d '[:space:]'`: the latter also eats the
+      # newlines and returns one giant concatenated "address".
+      tail -n +2 "$out" | cut -d, -f1 | tr -d ' \r' \
         | head -n ${toString cfg.candidates}
     }
 
