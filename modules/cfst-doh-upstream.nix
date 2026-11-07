@@ -361,9 +361,14 @@ in
         PrivateTmp = true;
         PrivateDevices = true;
         NoNewPrivileges = true;
+        # AF_NETLINK is not optional: `unbound-checkconf` resolves the
+        # `interface:` names through getifaddrs(3), which is a netlink socket.
+        # Without it the gate fails with "Address family not supported by
+        # protocol" and every round is rolled back.
         RestrictAddressFamilies = [
           "AF_INET"
           "AF_INET6"
+          "AF_NETLINK"
           "AF_UNIX"
         ];
         ReadWritePaths = [ (builtins.dirOf cfg.includeFile) ];
