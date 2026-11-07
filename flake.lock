@@ -75,6 +75,30 @@
       },
       "parent": []
     },
+    "cloudflareIpsV4": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-V4dThTb8iw02hjngubVtSJbEeWgOS1e/ODt1fLjLZvk=",
+        "type": "file",
+        "url": "https://www.cloudflare.com/ips-v4"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://www.cloudflare.com/ips-v4"
+      }
+    },
+    "cloudflareIpsV6": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-BgpkXCAh/MmK3GTAElKiGJctCYUN+/UgvpuawqGmitE=",
+        "type": "file",
+        "url": "https://www.cloudflare.com/ips-v6"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://www.cloudflare.com/ips-v6"
+      }
+    },
     "crane": {
       "locked": {
         "lastModified": 1781825982,
@@ -486,6 +510,8 @@
         "aria2-next": "aria2-next",
         "auto-bangumi": "auto-bangumi",
         "avahi2dns": "avahi2dns",
+        "cloudflareIpsV4": "cloudflareIpsV4",
+        "cloudflareIpsV6": "cloudflareIpsV6",
         "dibbler": "dibbler",
         "dnsmasq-china-list": "dnsmasq-china-list",
         "honk": "honk",
