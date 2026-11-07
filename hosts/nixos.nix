@@ -420,8 +420,15 @@
   # `ipv6 = true` additionally pins native AAAA from Cloudflare's IPv6 ranges;
   # left off here because the native IPv6 path to the edge measured 30-60% loss
   # on this line, and the 优选 workflow is IPv4-centric.
+  #
+  # `enableTimer` stays off: a full run probes Cloudflare's entire published
+  # IPv4 space (~6k addresses / ~24k connects). The current set was picked by
+  # hand from a small ICMP-prefiltered pool; until the module does that
+  # prefilter itself, run it manually (`systemctl start cfst-doh-upstream`) and
+  # not from a timer.
   services.cfstDohUpstream = {
     enable = true;
+    enableTimer = false;
     # ipv6 = true;
   };
 

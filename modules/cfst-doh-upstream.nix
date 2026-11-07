@@ -289,6 +289,21 @@ in
       '';
     };
 
+    enableTimer = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Install the periodic run.
+
+        Off by default, and deliberately so: one run probes Cloudflare's whole
+        published IPv4 space — ~6k addresses, ~24k TCP connects in well under a
+        minute. That is a scan of someone else's edge, and the first deployment
+        of it also took honk down (the probes were proxied; see the `(must)`
+        note in the host config). Keep it manual (`systemctl start
+        cfst-doh-upstream`) or narrow `candidates`/`ipv4Ranges` first.
+      '';
+    };
+
     calendar = lib.mkOption {
       type = lib.types.str;
       default = "*-*-* 04:23:00";
@@ -377,7 +392,7 @@ in
       };
     };
 
-    systemd.timers.cfst-doh-upstream = {
+    systemd.timers.cfst-doh-upstream = lib.mkIf cfg.enableTimer {
       description = "Periodic CloudflareSpeedTest run for the DoH upstream";
       wantedBy = [ "timers.target" ];
       timerConfig = {
