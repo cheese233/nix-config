@@ -1,0 +1,214 @@
+diff --git a/avahi.go b/avahi.go
+index 670d363..ff01468 100644
+--- a/avahi.go
++++ b/avahi.go
+@@ -13,6 +13,8 @@ import (
+ type avahiClient interface {
+ 	io.Closer
+ 	ResolveHostName(iface, protocol int32, name string, aprotocol int32, flags uint32) (avahi.HostName, error)
++	RecordBrowserNew(iface, protocol int32, name string, class int16, recordType int16, flags uint32) (*avahi.RecordBrowser, error)
++	RecordBrowserFree(r *avahi.RecordBrowser)
+ }
+ 
+ type avahiConn struct {
+@@ -32,13 +34,24 @@ func newAvahiClient() (avahiClient, error) {
+ 		return nil, fmt.Errorf("connection to avahi failed: %w", err)
+ 	}
+ 
+-	return &avahiConn{dbus: conn, server: server}, nil
++	return &avahiConn{
++		dbus:   conn,
++		server: server,
++	}, nil
+ }
+ 
+ func (me *avahiConn) ResolveHostName(iface, protocol int32, name string, aprotocol int32, flags uint32) (avahi.HostName, error) {
+ 	return me.server.ResolveHostName(iface, protocol, name, aprotocol, flags)
+ }
+ 
++func (me *avahiConn) RecordBrowserNew(iface, protocol int32, name string, class int16, recordType int16, flags uint32) (*avahi.RecordBrowser, error) {
++	return me.server.RecordBrowserNew(iface, protocol, name, class, recordType, flags)
++}
++
++func (me *avahiConn) RecordBrowserFree(r *avahi.RecordBrowser) {
++	me.server.RecordBrowserFree(r)
++}
++
+ func (me *avahiConn) Close() error {
+ 	me.server.Close()
+ 	return me.dbus.Close()
+diff --git a/query.go b/query.go
+index dbc1b8c..1d0c369 100644
+--- a/query.go
++++ b/query.go
+@@ -3,13 +3,23 @@ package main
+ import (
+ 	"context"
+ 	"fmt"
++	"net"
++	"sort"
+ 	"strings"
++	"time"
+ 
+ 	"github.com/holoplot/go-avahi"
+ 	"github.com/miekg/dns"
+ 	"github.com/sirupsen/logrus"
+ )
+ 
++const (
++	// browseSettle is how long a record browse waits for one more address
++	// record once it has seen one; browseTimeout caps a whole browse.
++	browseSettle  = 100 * time.Millisecond
++	browseTimeout = 2 * time.Second
++)
++
+ func (me *forwarder) onDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
+ 	ctx := me.ctx
+ 	if me.timeout != 0 {
+@@ -108,7 +118,32 @@ func (me *forwarder) queryAvahi(ctx context.Context, name string, proto int32, r
+ 	return rr, err
+ }
+ 
++// doAvahiRequest resolves name to one address that a unicast DNS client can
++// actually use. Avahi's ResolveHostName answers with a single address, picked
++// from whichever address record it saw first, so a host that announces both a
++// routable and a link-local IPv6 address regularly ends up resolving to the
++// link-local one. Those are scoped to a single link, so in that case the whole
++// record set is browsed instead and the first routable address is answered.
+ func (me *forwarder) doAvahiRequest(ctx context.Context, name string, proto int32) (string, error) {
++	address, err := me.resolveHostName(ctx, name, proto)
++	if err == nil && address != "" && !isLinkLocal(address) {
++		return address, nil
++	}
++
++	addresses := me.browseAddresses(ctx, name, proto)
++	for _, candidate := range addresses {
++		if !isLinkLocal(candidate) {
++			return candidate, nil
++		}
++	}
++
++	if err != nil {
++		return "", err
++	}
++	return "", fmt.Errorf("no routable address for %s (avahi only offered %v)", name, addresses)
++}
++
++func (me *forwarder) resolveHostName(ctx context.Context, name string, proto int32) (string, error) {
+ 	type avahiResult struct {
+ 		address string
+ 		err     error
+@@ -139,3 +174,113 @@ func (me *forwarder) doAvahiRequest(ctx context.Context, name string, proto int3
+ 		return result.address, nil
+ 	}
+ }
++
++// browseAddresses returns every address avahi holds for name, sorted so that
++// repeated lookups of a multi-homed host answer deterministically.
++func (me *forwarder) browseAddresses(ctx context.Context, name string, proto int32) []string {
++	recordType, ok := recordTypeFor(proto)
++	if !ok {
++		return nil
++	}
++
++	browser, err := me.avahi.RecordBrowserNew(
++		avahi.InterfaceUnspec,
++		proto,
++		strings.TrimSuffix(name, "."),
++		int16(dns.ClassINET),
++		recordType,
++		0,
++	)
++	if err != nil {
++		me.logger.WithError(err).WithField("name", name).Warning("failed to browse avahi address records")
++		return nil
++	}
++	defer me.avahi.RecordBrowserFree(browser)
++
++	addresses := make(map[string]struct{})
++	var (
++		settle  *time.Timer
++		settleC <-chan time.Time
++	)
++
++	timeout := time.NewTimer(browseTimeout)
++	defer timeout.Stop()
++
++	for {
++		select {
++		case record, ok := <-browser.AddChannel:
++			if !ok {
++				return sortedAddresses(addresses)
++			}
++			address := addressFromRecord(proto, record.Rdata)
++			if address == "" {
++				continue
++			}
++			if _, known := addresses[address]; known {
++				continue
++			}
++			addresses[address] = struct{}{}
++			if settle == nil {
++				settle = time.NewTimer(browseSettle)
++				settleC = settle.C
++				defer settle.Stop()
++			} else {
++				settle.Reset(browseSettle)
++			}
++
++		case <-settleC:
++			return sortedAddresses(addresses)
++
++		case <-timeout.C:
++			return sortedAddresses(addresses)
++
++		case <-ctx.Done():
++			return sortedAddresses(addresses)
++		}
++	}
++}
++
++func recordTypeFor(proto int32) (int16, bool) {
++	switch proto {
++	case avahi.ProtoInet:
++		return int16(dns.TypeA), true
++	case avahi.ProtoInet6:
++		return int16(dns.TypeAAAA), true
++	default:
++		return 0, false
++	}
++}
++
++func addressFromRecord(proto int32, rdata []byte) string {
++	switch proto {
++	case avahi.ProtoInet:
++		if len(rdata) != net.IPv4len {
++			return ""
++		}
++	case avahi.ProtoInet6:
++		if len(rdata) != net.IPv6len {
++			return ""
++		}
++	default:
++		return ""
++	}
++	return net.IP(rdata).String()
++}
++
++// isLinkLocal reports whether address is link-local, i.e. in fe80::/10 (or its
++// IPv4 counterpart 169.254.0.0/16). Records in that range only carry meaning
++// on the link they were announced on, so answering with one gives clients an
++// address they cannot connect to.
++func isLinkLocal(address string) bool {
++	ip := net.ParseIP(address)
++	return ip != nil && ip.IsLinkLocalUnicast()
++}
++
++func sortedAddresses(addresses map[string]struct{}) []string {
++	sorted := make([]string, 0, len(addresses))
++	for address := range addresses {
++		sorted = append(sorted, address)
++	}
++	sort.Strings(sorted)
++	return sorted
++}

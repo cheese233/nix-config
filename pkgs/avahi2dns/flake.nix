@@ -25,6 +25,16 @@
               hash = "sha256-k9Yi6c0LJw6w5RgxfNM82HQ/xDBCqyoSdKlnSfjOpxI=";
             };
 
+            # Avahi's ResolveHostName answers with a single address, picked
+            # from whichever record it saw first. For a host that announces
+            # both a routable and an IPv6 link-local address (fe80::/10), that
+            # is regularly the link-local one, which no unicast DNS client can
+            # connect to. The patch browses the whole record set and answers
+            # with a routable address instead.
+            patches = [
+              ./0001-query-do-not-answer-with-link-local-addresses.patch
+            ];
+
             vendorHash = "sha256-s+NuVtHmN963kNyaIsA5q9a+e1uDvQsH4qNDF63gk0Y=";
 
             doCheck = false;
