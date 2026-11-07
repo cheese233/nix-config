@@ -422,9 +422,11 @@ in
 
       # The script is a plain writeShellScript (no PATH of its own): give it
       # exactly what it shells out to — coreutils, diffutils for `cmp`, gawk for
-      # the candidate/ranking arithmetic, iputils for `ping`.
+      # the candidate/ranking arithmetic, iputils for `ping`, and bash because
+      # `xargs` re-executes the ping one-liner by name.
       # This is a unit-level option, not a [Service] directive.
       path = [
+        pkgs.bash
         pkgs.coreutils
         pkgs.diffutils
         pkgs.gawk
