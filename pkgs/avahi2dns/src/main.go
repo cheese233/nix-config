@@ -24,6 +24,26 @@ func (z *zoneList) Set(value string) error {
 	return nil
 }
 
+// maxQuestions bounds how many questions one message may carry. unbound, the
+// only client this bridge serves, sends one per message, but a message asking
+// for A and AAAA together is exactly the case that has to stay independent.
+const maxQuestions = 8
+
+// acceptMsg replaces dns.DefaultMsgAcceptFunc, which only lets single question
+// queries through.
+func acceptMsg(dh dns.Header) dns.MsgAcceptAction {
+	if dh.Bits&0x8000 != 0 {
+		return dns.MsgIgnore // a response, not a query
+	}
+	if opcode := int(dh.Bits>>11) & 0xF; opcode != dns.OpcodeQuery {
+		return dns.MsgRejectNotImplemented
+	}
+	if dh.Qdcount == 0 || dh.Qdcount > maxQuestions {
+		return dns.MsgReject
+	}
+	return dns.MsgAccept
+}
+
 func main() {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
@@ -67,9 +87,10 @@ func main() {
 	}
 
 	dnsServer := &dns.Server{
-		Addr:    net.JoinHostPort(*addr, strconv.Itoa(*port)),
-		Net:     "udp",
-		Handler: mux,
+		Addr:          net.JoinHostPort(*addr, strconv.Itoa(*port)),
+		Net:           "udp",
+		Handler:       mux,
+		MsgAcceptFunc: acceptMsg,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

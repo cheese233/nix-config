@@ -138,3 +138,17 @@ func TestSOAOnlyForConfiguredZones(t *testing.T) {
 		t.Fatalf("got %v, want no answer outside the zone", describe(rrs))
 	}
 }
+
+func TestAcceptMsgAllowsSeveralQuestions(t *testing.T) {
+	const query = 0x0100 // RD
+
+	if got := acceptMsg(dns.Header{Bits: query, Qdcount: 2}); got != dns.MsgAccept {
+		t.Fatalf("two questions: got %v, want MsgAccept", got)
+	}
+	if got := acceptMsg(dns.Header{Bits: query, Qdcount: 0}); got != dns.MsgReject {
+		t.Fatalf("no questions: got %v, want MsgReject", got)
+	}
+	if got := acceptMsg(dns.Header{Bits: query | 0x8000, Qdcount: 1}); got != dns.MsgIgnore {
+		t.Fatalf("response: got %v, want MsgIgnore", got)
+	}
+}
