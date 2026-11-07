@@ -148,14 +148,23 @@ microdoh3 --xps-cpus --xps-interface enp2s0f1 --upstream https://dns.google/dns-
   `ClientConfig::clone()`), but it only *offers* early data when the server's
   `NewSessionTicket` carries the `early_data` extension
   (`max_early_data_size > 0`); rustls defaults that to 0 when the extension is
-  absent. Some endpoints never send it — e.g. a Cloudflare vhost served via
-  Tunnel/Worker, where replaying a request is not safe — and then no client
-  change can enable 0-RTT. Verify a candidate endpoint with:
+  absent. Verify a candidate endpoint with:
 
   ```bash
-  openssl s_client -quic -connect <host>:443 -alpn h3 -msg 2>&1 |
-    grep -c '2a 00 04 ff ff ff ff'   # >0 ⇒ early_data advertised
+  openssl s_client -quic -connect <host>:443 -alpn h3 \
+    -sess_out /tmp/s.pem -ign_eof </dev/null >/dev/null 2>&1
+  openssl sess_id -in /tmp/s.pem -text -noout | grep 'Max Early Data'
+  # 4294967295 ⇒ advertised; 0 ⇒ not advertised for this hostname
   ```
+
+  On Cloudflare this is **per hostname, not per zone**. The zone-level
+  `0rtt` setting ("0-RTT Connection Resumption") and `tls_1_3 = zrt` both have
+  to be on, but a hostname attached to a **Pages or Workers custom domain** gets
+  no `early_data` at all however those are set — the same zone's plain proxied
+  hostnames do get it. A DoH endpoint fronted by a Worker/Pages function
+  therefore cannot do 0-RTT on that hostname; serve it from a plain proxied
+  record instead (a Snippets rule that matches on path + `Authorization`, not
+  hostname, moves with it for free).
 
   The two outcomes are reported separately (`0-rtt offered` vs `0-rtt
   accepted`, plus `FLAG_ZERO_RTT`/`FLAG_ZERO_RTT_OK` in the score page) so a
@@ -171,8 +180,10 @@ microdoh3 --xps-cpus --xps-interface enp2s0f1 --upstream https://dns.google/dns-
 - Known limitation: when a server *does* advertise early data and then rejects
   it, noq resets the 0-RTT streams and microdoh3 answers SERVFAIL for those
   queries instead of re-dispatching them over the 1-RTT handshake. unbound
-  retries, so nothing is lost, but one RTT is wasted. Unreachable against
-  endpoints that never advertise early data (see above).
+  retries, so nothing is lost, but one RTT is wasted. This is now reachable: a
+  ticket is offered for every reconnect until it expires (~48 h on Cloudflare),
+  and a reconnect that lands after expiry is answered by the server with 1-RTT
+  only.
 - The HTTP/3 layer implements the client subset needed for DoH: control
   stream + SETTINGS (QPACK dynamic table disabled), one request stream per
   query, GOAWAY handling. No server push, no trailers semantics.
