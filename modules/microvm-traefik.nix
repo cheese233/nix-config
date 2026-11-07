@@ -199,7 +199,28 @@ assert lib.assertMsg (builtins.length cloudflareRanges >= 10)
             # token is supplied via the age-encrypted env file
             # (CF_DNS_API_TOKEN), which the NixOS module loads into the
             # process environment via environmentFiles.
-            dnsChallenge.provider = "cloudflare";
+            dnsChallenge = {
+              provider = "cloudflare";
+              # This VM is IPv6-only. Lego's default propagation check asks the
+              # zone's authoritative nameservers directly, but Cloudflare's
+              # theo.ns.cloudflare.com only answers on IPv4 (its AAAA lookup
+              # returns SERVFAIL here), so that check can never pass and every
+              # issuance stalls for the full 120s timeout. Check against public
+              # recursive resolvers over IPv6 instead.
+              resolvers = [
+                "[2606:4700:4700::1111]:53"
+                "[2001:4860:4860::8888]:53"
+              ];
+              propagation = {
+                disableANSChecks = true;
+                # The record shows up on Cloudflare's anycast edge unevenly:
+                # the check above can pass within ~2s while Let's Encrypt's
+                # validators, querying from another region, still get NODATA
+                # ("No TXT record found"). Settle before the check so the
+                # challenge only goes to LE once the record is everywhere.
+                delayBeforeChecks = 30;
+              };
+            };
           };
 
           # Emit the rendered Go-template dynamic config at INFO so the
@@ -267,6 +288,28 @@ assert lib.assertMsg (builtins.length cloudflareRanges >= 10)
           http.middlewares.cloudflare-only.ipAllowList.sourceRange = cloudflareRanges;
         };
       };
+
+      # Traefik performs its ACME directory lookup exactly once, at startup.
+      # If that single attempt fails — the resolver here is the host's unbound,
+      # which intermittently fails while its DoH upstream reconnects, and this
+      # VM boots independently of it — Traefik never retries and keeps serving
+      # its built-in self-signed default cert until someone restarts it.
+      #
+      # Gate startup on the same end-to-end check Traefik needs (DNS + TLS +
+      # HTTP to the ACME directory). Bounded, so a genuinely broken network
+      # cannot keep Traefik — and therefore every proxied site — down forever.
+      systemd.services.traefik.preStart = ''
+        i=0
+        while [ "$i" -lt 30 ]; do
+          if ${lib.getExe pkgs.curl} --fail --silent --max-time 5 --proto '=https' \
+               https://acme-v02.api.letsencrypt.org/directory -o /dev/null; then
+            exit 0
+          fi
+          i=$((i + 1))
+          sleep 2
+        done
+        echo "ACME directory still unreachable, starting traefik anyway" >&2
+      '';
 
       systemd.tmpfiles.rules = [
         "d /var/lib/traefik 0750 traefik traefik -"
