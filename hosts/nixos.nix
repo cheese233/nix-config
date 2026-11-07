@@ -20,6 +20,7 @@
     ../modules/amneziawg.nix
     ../modules/socks5-wpad.nix
     ../modules/cockpit.nix
+    ../modules/cfst-doh-upstream.nix
   ];
 
   environment.systemPackages = with pkgs; [
@@ -233,13 +234,16 @@
         echo "    forward-addr: 180.184.2.2"
       }
       {
-        # NOTE: the DoH upstream is deliberately left with its own real AAAA
-        # records (no `dns64-ignore-aaaa`). microdoh3 therefore resolves
-        # $DOMAIN to native Cloudflare addresses and dials them itself: honk's
-        # `pname(microdoh3) -> direct` matches this process for UDP too, so the
-        # DoH never rides the subscription. What the weighted selection varies
-        # is therefore *which direct path* is used — e.g. native IPv6 to the
-        # edge (measured 30-60% loss here) versus IPv4 — not proxy vs direct.
+        # NOTE: $DOMAIN is only forwarded here as the *fallback*. Once
+        # cfst-doh-upstream (see below) has published 优选 IPs for the name as
+        # local-data, unbound answers the local zone first — local zones are
+        # served in daemon/worker.c, before the module stack and before any
+        # forward-zone lookup — so the forward below stops being consulted for
+        # A queries while the local data exists. Keeping it means the name
+        # still resolves (to whatever the anycast address is) on the very first
+        # boot, before the first CloudflareSpeedTest run, which is also what
+        # avoids the bootstrap deadlock: microdoh3 needs $DOMAIN resolved before
+        # it can answer, and the default route below points at microdoh3.
         #
         # 1. .local → avahi2dns mDNS bridge (127.0.0.1:5354)
         echo "stub-zone:"
@@ -250,8 +254,8 @@
           [[ -z "$domain" || "$domain" == \#* ]] && continue
           emit_zone "$domain"
         done < /etc/unbound/china-domain-list.txt
-        # DOH upstream domain from agenix secret — also via China DNS to avoid
-        # bootstrap deadlock (microdoh3 needs to resolve the DoH domain before it's up).
+        # DoH upstream domain from agenix secret — also via China DNS, as the
+        # pre-优选 fallback described above.
         emit_zone "$DOMAIN"
         # 3. Default fallback → microdoh3 (DoH/3 client on [::1]:5443)
         echo "forward-zone:"
@@ -298,7 +302,9 @@
         control-port = 8953;
       };
       # Include runtime-generated forward/stub zones (see unbound-forward-zones.service).
-      include = "/var/lib/unbound/forward-zones.conf";
+      # cfst-doh-upstream appends its own generated include (the 优选 IP
+      # local-data) through `lib.mkAfter`, which is why this is a list.
+      include = [ "/var/lib/unbound/forward-zones.conf" ];
     };
   };
 
@@ -340,12 +346,29 @@
   #
   # The candidate set is exactly what $DOMAIN resolves to (via unbound, hence
   # under DNS control) — widen the pool by serving more addresses for the name;
-  # there is deliberately no client-side seed list. $DOMAIN keeps its real
-  # AAAA and A records, so both families are candidates and the workers'
-  # dual-stack sockets can reach either, letting the scoring compare *direct*
-  # paths (native IPv6 vs IPv4 to the same edge — measured >10x apart) instead
-  # of pinning one family by hand. To route the DoH through the subscription
-  # instead, the lever is the honk rule below: `pname(microdoh3) -> direct`.
+  # there is deliberately no client-side seed list. To route the DoH through
+  # the subscription instead, the lever is the honk rule below:
+  # `pname(microdoh3) -> direct`.
+  #
+  # What the name resolves to is cfst-doh-upstream's job (module below): it runs
+  # XIU2/CloudflareSpeedTest on this line, keeps the addresses that are fast
+  # *and* actually answer this endpoint over TLS, and publishes them as unbound
+  # local-data. Two consequences worth knowing:
+  #
+  #   * A/AAAA for the name are then answered from that local zone, which
+  #     unbound serves in the worker before DNS64 and before the forward-zone,
+  #     so the pinned IPv4 addresses arrive without a DNS64-synthesised twin.
+  #   * with `ipv6 = false` (the default) AAAA is an authoritative NODATA — a
+  #     transparent local zone does not fall through for a name it has data
+  #     for — so the pool is the selected IPv4 set only. That drops the
+  #     two-family comparison (native IPv6 vs IPv4 to the same edge, measured
+  #     >10x apart) this block used to rely on. Set
+  #     `services.cfstDohUpstream.ipv6 = true` to test Cloudflare's IPv6 ranges
+  #     too and pin native AAAA, restoring it.
+  #
+  # The weighted selection still has real work to do either way: the pinned
+  # addresses differ by >10x at the same instant (0.42s vs 5s timeouts), and
+  # CFST's ranking is per-run noise on top of that.
   #
   # NOTE: --xps-cpus is deliberately NOT enabled. It is implemented (and the
   # module exposes it), but enabling it here would give 12 workers instead of 6
@@ -387,6 +410,19 @@
       ExecStartPre = lib.mkForce null;
       RestrictAddressFamilies = [ "AF_INET" "AF_INET6" "AF_UNIX" ];
     };
+  };
+
+  # ==================== Cloudflare 优选 IP for the DoH upstream ====================
+  # CloudflareSpeedTest on a timer → unbound local-data → microdoh3's candidate
+  # set (see the block above for how the two compose). The DoH endpoint's
+  # DOMAIN/URI_PATH/TOKEN come from the same agenix file microdoh3 reads.
+  #
+  # `ipv6 = true` additionally pins native AAAA from Cloudflare's IPv6 ranges;
+  # left off here because the native IPv6 path to the edge measured 30-60% loss
+  # on this line, and the 优选 workflow is IPv4-centric.
+  services.cfstDohUpstream = {
+    enable = true;
+    # ipv6 = true;
   };
 
   services.resolved.enable = false;
@@ -597,6 +633,13 @@
         pname(unbound) && dip(geoip:cn) -> direct(must)
         pname(unbound) -> proxy(must)
         pname(microdoh3) -> direct
+        # The 优选-IP machinery must measure the path microdoh3 actually uses:
+        # routed through the subscription, CFST would rank proxy exits and the
+        # probe would validate the proxy's reachability instead. `dohprobe` is
+        # the DoH validator — a copy of curl under that name, see
+        # modules/cfst-doh-upstream.nix.
+        pname(cfst) -> direct
+        pname(dohprobe) -> direct
 
         dip(geoip:gb) && dport(500, 4500) && l4proto(udp) -> vowifi
 
