@@ -1,17 +1,44 @@
 diff --git a/avahi.go b/avahi.go
-index 670d363..ff01468 100644
+index 670d363..ec3b23b 100644
 --- a/avahi.go
 +++ b/avahi.go
-@@ -13,6 +13,8 @@ import (
+@@ -1,11 +1,27 @@
+ package main
+ 
+ import (
++	"context"
+ 	"fmt"
+ 	"io"
++	"net"
++	"sort"
++	"strings"
++	"time"
+ 
+ 	"github.com/godbus/dbus/v5"
+ 	"github.com/holoplot/go-avahi"
++	"github.com/miekg/dns"
++)
++
++const (
++	avahiBusName = "org.freedesktop.Avahi"
++	avahiBusPath = "/"
++
++	// addressSettle is how long a record browse waits for one more address
++	// record once it has seen one; addressTimeout caps a whole browse.
++	addressSettle  = 200 * time.Millisecond
++	addressTimeout = 2 * time.Second
+ )
+ 
+ //go:generate go tool mockery
+@@ -13,6 +29,7 @@ import (
  type avahiClient interface {
  	io.Closer
  	ResolveHostName(iface, protocol int32, name string, aprotocol int32, flags uint32) (avahi.HostName, error)
-+	RecordBrowserNew(iface, protocol int32, name string, class int16, recordType int16, flags uint32) (*avahi.RecordBrowser, error)
-+	RecordBrowserFree(r *avahi.RecordBrowser)
++	AddressRecords(ctx context.Context, proto int32, name string) ([]string, error)
  }
  
  type avahiConn struct {
-@@ -32,13 +34,24 @@ func newAvahiClient() (avahiClient, error) {
+@@ -32,14 +49,162 @@ func newAvahiClient() (avahiClient, error) {
  		return nil, fmt.Errorf("connection to avahi failed: %w", err)
  	}
  
@@ -26,104 +53,55 @@ index 670d363..ff01468 100644
  	return me.server.ResolveHostName(iface, protocol, name, aprotocol, flags)
  }
  
-+func (me *avahiConn) RecordBrowserNew(iface, protocol int32, name string, class int16, recordType int16, flags uint32) (*avahi.RecordBrowser, error) {
-+	return me.server.RecordBrowserNew(iface, protocol, name, class, recordType, flags)
-+}
-+
-+func (me *avahiConn) RecordBrowserFree(r *avahi.RecordBrowser) {
-+	me.server.RecordBrowserFree(r)
-+}
-+
- func (me *avahiConn) Close() error {
- 	me.server.Close()
- 	return me.dbus.Close()
-diff --git a/query.go b/query.go
-index dbc1b8c..1d0c369 100644
---- a/query.go
-+++ b/query.go
-@@ -3,13 +3,23 @@ package main
- import (
- 	"context"
- 	"fmt"
-+	"net"
-+	"sort"
- 	"strings"
-+	"time"
- 
- 	"github.com/holoplot/go-avahi"
- 	"github.com/miekg/dns"
- 	"github.com/sirupsen/logrus"
- )
- 
-+const (
-+	// browseSettle is how long a record browse waits for one more address
-+	// record once it has seen one; browseTimeout caps a whole browse.
-+	browseSettle  = 100 * time.Millisecond
-+	browseTimeout = 2 * time.Second
-+)
-+
- func (me *forwarder) onDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
- 	ctx := me.ctx
- 	if me.timeout != 0 {
-@@ -108,7 +118,32 @@ func (me *forwarder) queryAvahi(ctx context.Context, name string, proto int32, r
- 	return rr, err
- }
- 
-+// doAvahiRequest resolves name to one address that a unicast DNS client can
-+// actually use. Avahi's ResolveHostName answers with a single address, picked
-+// from whichever address record it saw first, so a host that announces both a
-+// routable and a link-local IPv6 address regularly ends up resolving to the
-+// link-local one. Those are scoped to a single link, so in that case the whole
-+// record set is browsed instead and the first routable address is answered.
- func (me *forwarder) doAvahiRequest(ctx context.Context, name string, proto int32) (string, error) {
-+	address, err := me.resolveHostName(ctx, name, proto)
-+	if err == nil && address != "" && !isLinkLocal(address) {
-+		return address, nil
-+	}
-+
-+	addresses := me.browseAddresses(ctx, name, proto)
-+	for _, candidate := range addresses {
-+		if !isLinkLocal(candidate) {
-+			return candidate, nil
-+		}
-+	}
-+
-+	if err != nil {
-+		return "", err
-+	}
-+	return "", fmt.Errorf("no routable address for %s (avahi only offered %v)", name, addresses)
-+}
-+
-+func (me *forwarder) resolveHostName(ctx context.Context, name string, proto int32) (string, error) {
- 	type avahiResult struct {
- 		address string
- 		err     error
-@@ -139,3 +174,113 @@ func (me *forwarder) doAvahiRequest(ctx context.Context, name string, proto int3
- 		return result.address, nil
- 	}
- }
-+
-+// browseAddresses returns every address avahi holds for name, sorted so that
-+// repeated lookups of a multi-homed host answer deterministically.
-+func (me *forwarder) browseAddresses(ctx context.Context, name string, proto int32) []string {
++// AddressRecords returns every address avahi knows for name under proto
++// (avahi.ProtoInet or avahi.ProtoInet6). ResolveHostName only ever exposes a
++// single address per host, so a record browser is used to see all of them.
++//
++// The browser runs on its own bus connection: go-avahi hands the shared
++// connection's signals to its Server, and its RecordBrowserNew marshals the
++// class and type as int16 while avahi expects uint16 ("iisqqu").
++func (me *avahiConn) AddressRecords(ctx context.Context, proto int32, name string) ([]string, error) {
 +	recordType, ok := recordTypeFor(proto)
 +	if !ok {
-+		return nil
++		return nil, fmt.Errorf("unsupported protocol: %d", proto)
 +	}
 +
-+	browser, err := me.avahi.RecordBrowserNew(
++	conn, err := dbus.SystemBusPrivate()
++	if err != nil {
++		return nil, fmt.Errorf("connection to dbus failed: %w", err)
++	}
++	defer conn.Close()
++
++	if err := conn.Auth(nil); err != nil {
++		return nil, fmt.Errorf("dbus authentication failed: %w", err)
++	}
++	if err := conn.Hello(); err != nil {
++		return nil, fmt.Errorf("dbus hello failed: %w", err)
++	}
++
++	signals := make(chan *dbus.Signal, 64)
++	conn.Signal(signals)
++
++	if err := conn.AddMatchSignal(dbus.WithMatchInterface("org.freedesktop.Avahi.RecordBrowser")); err != nil {
++		return nil, fmt.Errorf("dbus signal match failed: %w", err)
++	}
++
++	var path dbus.ObjectPath
++	err = conn.Object(avahiBusName, avahiBusPath).Call(
++		avahiBusName+".Server.RecordBrowserNew", 0,
 +		avahi.InterfaceUnspec,
 +		proto,
 +		strings.TrimSuffix(name, "."),
-+		int16(dns.ClassINET),
-+		recordType,
-+		0,
-+	)
++		uint16(dns.ClassINET),
++		uint16(recordType),
++		uint32(0),
++	).Store(&path)
 +	if err != nil {
-+		me.logger.WithError(err).WithField("name", name).Warning("failed to browse avahi address records")
-+		return nil
++		return nil, fmt.Errorf("failed to browse address records: %w", err)
 +	}
-+	defer me.avahi.RecordBrowserFree(browser)
++	defer func() {
++		_ = conn.Object(avahiBusName, path).Call(avahiBusName+".RecordBrowser.Free", 0).Err
++	}()
 +
 +	addresses := make(map[string]struct{})
 +	var (
@@ -131,16 +109,31 @@ index dbc1b8c..1d0c369 100644
 +		settleC <-chan time.Time
 +	)
 +
-+	timeout := time.NewTimer(browseTimeout)
++	timeout := time.NewTimer(addressTimeout)
 +	defer timeout.Stop()
 +
 +	for {
 +		select {
-+		case record, ok := <-browser.AddChannel:
++		case signal, ok := <-signals:
 +			if !ok {
-+				return sortedAddresses(addresses)
++				return sortedAddresses(addresses), nil
 +			}
-+			address := addressFromRecord(proto, record.Rdata)
++			if signal.Path != path || signal.Name != avahiBusName+".RecordBrowser.ItemNew" {
++				continue
++			}
++
++			var (
++				iface, protocol int32
++				recordName      string
++				class, gotType  uint16
++				rdata           []byte
++				flags           uint32
++			)
++			if err := dbus.Store(signal.Body, &iface, &protocol, &recordName, &class, &gotType, &rdata, &flags); err != nil {
++				continue
++			}
++
++			address := addressFromRecord(proto, rdata)
 +			if address == "" {
 +				continue
 +			}
@@ -148,25 +141,31 @@ index dbc1b8c..1d0c369 100644
 +				continue
 +			}
 +			addresses[address] = struct{}{}
++
 +			if settle == nil {
-+				settle = time.NewTimer(browseSettle)
++				settle = time.NewTimer(addressSettle)
 +				settleC = settle.C
 +				defer settle.Stop()
 +			} else {
-+				settle.Reset(browseSettle)
++				settle.Reset(addressSettle)
 +			}
 +
 +		case <-settleC:
-+			return sortedAddresses(addresses)
++			return sortedAddresses(addresses), nil
 +
 +		case <-timeout.C:
-+			return sortedAddresses(addresses)
++			return sortedAddresses(addresses), nil
 +
 +		case <-ctx.Done():
-+			return sortedAddresses(addresses)
++			return sortedAddresses(addresses), ctx.Err()
 +		}
 +	}
 +}
++
+ func (me *avahiConn) Close() error {
+ 	me.server.Close()
+ 	return me.dbus.Close()
+ }
 +
 +func recordTypeFor(proto int32) (int16, bool) {
 +	switch proto {
@@ -195,15 +194,6 @@ index dbc1b8c..1d0c369 100644
 +	return net.IP(rdata).String()
 +}
 +
-+// isLinkLocal reports whether address is link-local, i.e. in fe80::/10 (or its
-+// IPv4 counterpart 169.254.0.0/16). Records in that range only carry meaning
-+// on the link they were announced on, so answering with one gives clients an
-+// address they cannot connect to.
-+func isLinkLocal(address string) bool {
-+	ip := net.ParseIP(address)
-+	return ip != nil && ip.IsLinkLocalUnicast()
-+}
-+
 +func sortedAddresses(addresses map[string]struct{}) []string {
 +	sorted := make([]string, 0, len(addresses))
 +	for address := range addresses {
@@ -211,4 +201,65 @@ index dbc1b8c..1d0c369 100644
 +	}
 +	sort.Strings(sorted)
 +	return sorted
++}
+diff --git a/query.go b/query.go
+index dbc1b8c..ef69519 100644
+--- a/query.go
++++ b/query.go
+@@ -3,6 +3,7 @@ package main
+ import (
+ 	"context"
+ 	"fmt"
++	"net"
+ 	"strings"
+ 
+ 	"github.com/holoplot/go-avahi"
+@@ -108,7 +109,35 @@ func (me *forwarder) queryAvahi(ctx context.Context, name string, proto int32, r
+ 	return rr, err
+ }
+ 
++// doAvahiRequest resolves name to one address that a unicast DNS client can
++// actually use. Avahi's ResolveHostName answers with a single address, picked
++// from whichever address record it saw first, so a host that announces both a
++// routable and a link-local IPv6 address regularly ends up resolving to the
++// link-local one. Those are scoped to a single link, so in that case the whole
++// record set is browsed instead and the first routable address is answered.
+ func (me *forwarder) doAvahiRequest(ctx context.Context, name string, proto int32) (string, error) {
++	address, err := me.resolveHostName(ctx, name, proto)
++	if err == nil && address != "" && !isLinkLocal(address) {
++		return address, nil
++	}
++
++	addresses, browseErr := me.avahi.AddressRecords(ctx, proto, name)
++	if browseErr != nil {
++		me.logger.WithError(browseErr).WithField("name", name).Warning("failed to browse avahi address records")
++	}
++	for _, candidate := range addresses {
++		if !isLinkLocal(candidate) {
++			return candidate, nil
++		}
++	}
++
++	if err != nil {
++		return "", err
++	}
++	return "", fmt.Errorf("no routable address for %s (avahi only offered %v)", name, addresses)
++}
++
++func (me *forwarder) resolveHostName(ctx context.Context, name string, proto int32) (string, error) {
+ 	type avahiResult struct {
+ 		address string
+ 		err     error
+@@ -139,3 +168,12 @@ func (me *forwarder) doAvahiRequest(ctx context.Context, name string, proto int3
+ 		return result.address, nil
+ 	}
+ }
++
++// isLinkLocal reports whether address is link-local, i.e. in fe80::/10 (or its
++// IPv4 counterpart 169.254.0.0/16). Records in that range only carry meaning
++// on the link they were announced on, so answering with one gives clients an
++// address they cannot connect to.
++func isLinkLocal(address string) bool {
++	ip := net.ParseIP(address)
++	return ip != nil && ip.IsLinkLocalUnicast()
 +}
